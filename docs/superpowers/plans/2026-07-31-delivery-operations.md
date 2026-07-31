@@ -350,7 +350,7 @@ def test_requirements_and_design_docs_exist_without_placeholders() -> None:
 
 运行：`.venv/bin/pytest src/tests/smoke/test_documentation.py -v`
 
-运行：`rg -n 'TO''DO|T''BD|FIX''ME|待''定|真实密码|966f9d9f' README.md docs src/config deploy`
+运行：`rg -n 'TO''DO|T''BD|FIX''ME|待''定|真实''密码|966f''9d9f' README.md docs src/config deploy`
 
 预期：测试 PASS；搜索无输出。
 
