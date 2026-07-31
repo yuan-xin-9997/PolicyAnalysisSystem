@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -14,22 +14,27 @@ def _utc_now() -> datetime:
 
 
 class UTCDateTime(TypeDecorator[datetime]):
-    """Persist timestamps in UTC and restore their timezone semantics on SQLite."""
+    """Persist UTC timestamps as offset-bearing ISO 8601 text."""
 
-    impl = DateTime(timezone=True)
+    impl = String(40)
     cache_ok = True
 
-    def process_bind_param(self, value: datetime | None, dialect: object) -> datetime | None:
+    def process_bind_param(self, value: datetime | None, dialect: object) -> str | None:
         del dialect
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("时间值必须包含时区信息")
-        return value.astimezone(UTC)
+        return value.astimezone(UTC).isoformat()
 
-    def process_result_value(self, value: datetime | None, dialect: object) -> datetime | None:
+    def process_result_value(self, value: str | None, dialect: object) -> datetime | None:
         del dialect
-        return value.replace(tzinfo=UTC) if value is not None else None
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("存储的时间值必须包含时区信息")
+        return parsed.astimezone(UTC)
 
 
 class User(Base):

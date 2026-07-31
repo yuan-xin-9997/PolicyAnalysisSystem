@@ -7,6 +7,7 @@ from alembic.config import Config
 from policy_analysis.auth.models import User
 from policy_analysis.core.database import build_engine, create_schema, session_factory, session_scope
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import StatementError
 
 
 def test_sqlite_enables_foreign_keys_wal_and_auth_tables(tmp_path) -> None:
@@ -90,6 +91,50 @@ def test_auth_timestamps_round_trip_with_utc_semantics(tmp_path) -> None:
     assert loaded_user.updated_at == timestamp
 
 
+def test_auth_timestamps_persist_as_iso8601_text_with_utc_offset(tmp_path) -> None:
+    engine = build_engine(tmp_path / "app.sqlite3")
+    create_schema(engine)
+    timestamp = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
+
+    with session_factory(engine)() as session:
+        session.add(
+            User(
+                username="raw-timezone-test",
+                password_hash="hash",
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+        )
+        session.commit()
+
+    with engine.connect() as connection:
+        raw_created_at = connection.execute(
+            text("SELECT created_at FROM users WHERE username = 'raw-timezone-test'")
+        ).scalar_one()
+
+    assert raw_created_at == timestamp.isoformat()
+    assert raw_created_at.endswith("+00:00")
+
+
+def test_auth_timestamps_reject_naive_values(tmp_path) -> None:
+    engine = build_engine(tmp_path / "app.sqlite3")
+    create_schema(engine)
+    naive_timestamp = datetime(2026, 7, 31, 12, 0)
+
+    with session_factory(engine)() as session:
+        session.add(
+            User(
+                username="naive-timezone-test",
+                password_hash="hash",
+                created_at=naive_timestamp,
+                updated_at=naive_timestamp,
+            )
+        )
+
+        with pytest.raises(StatementError, match="时间值必须包含时区信息"):
+            session.commit()
+
+
 def test_session_scope_commits_successful_work(tmp_path) -> None:
     engine = build_engine(tmp_path / "app.sqlite3")
     create_schema(engine)
@@ -123,12 +168,24 @@ def test_alembic_upgrade_uses_environment_overridden_temporary_database(tmp_path
     project_root = Path(__file__).resolve().parents[4]
     database_path = tmp_path / "migrated.sqlite3"
     default_database_path = project_root / "src/data/app.sqlite3"
+    default_database_existed = default_database_path.exists()
+    default_database_metadata = (
+        (default_database_path.stat().st_size, default_database_path.stat().st_mtime_ns)
+        if default_database_existed
+        else None
+    )
     monkeypatch.setenv("POLICY_ANALYSIS_DATABASE__PATH", str(database_path))
 
     command.upgrade(Config(str(project_root / "alembic.ini")), "head")
 
     assert database_path.is_file()
-    assert not default_database_path.exists()
+    if default_database_existed:
+        assert default_database_path.exists()
+        assert (default_database_path.stat().st_size, default_database_path.stat().st_mtime_ns) == (
+            default_database_metadata
+        )
+    else:
+        assert not default_database_path.exists()
     engine = build_engine(database_path)
     inspector = inspect(engine)
     with engine.connect() as connection:
