@@ -35,6 +35,57 @@ def test_parse_rejects_invalid_or_duplicate_entries(text: str, message: str) -> 
         parse_password_text(text)
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        PasswordEntry("reader:admin", "safe-test-password", "user"),
+        PasswordEntry("reader", "safe:test-password", "user"),
+        PasswordEntry("reader", "line-one\nline-two", "user"),
+        PasswordEntry("reader", "line-one\rline-two", "user"),
+        PasswordEntry("#reader", "safe-test-password", "user"),
+        PasswordEntry(" reader", "safe-test-password", "user"),
+        PasswordEntry("reader", "safe-test-password ", "user"),
+        PasswordEntry("reader", "safe-test-password", "operator"),  # type: ignore[arg-type]
+    ],
+)
+def test_render_rejects_runtime_entries_that_cannot_round_trip(entry: PasswordEntry) -> None:
+    with pytest.raises(ValueError, match=r"条目 1") as error:
+        render_password_text([entry])
+
+    assert "reader" not in str(error.value)
+    assert "safe" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "reader:bad:password:user\n",
+        "#reader:safe-test-password:user\n",
+        " reader:safe-test-password:user\n",
+        "reader:safe-test-password :user\n",
+        "reader:safe\x00test-password:user\n",
+    ],
+)
+def test_parse_rejects_ambiguous_or_lossy_entries_without_echoing_values(text: str) -> None:
+    with pytest.raises(ValueError, match=r"第 1 行") as error:
+        parse_password_text(text)
+
+    assert "reader" not in str(error.value)
+    assert "safe" not in str(error.value)
+
+
+def test_render_rejects_duplicates_and_parse_render_round_trips_exact_entries() -> None:
+    entries = [
+        PasswordEntry("reader", "safe-test-password", "user"),
+        PasswordEntry("admin", "other-test-password", "admin"),
+    ]
+
+    with pytest.raises(ValueError, match=r"条目 2"):
+        render_password_text([entries[0], entries[0]])
+
+    assert parse_password_text(render_password_text(entries)) == entries
+
+
 def test_render_round_trips_entries_without_exposing_old_content() -> None:
     entries = [PasswordEntry("reader", "new-password", "user")]
 
@@ -112,4 +163,53 @@ def test_replace_keeps_existing_file_and_cleans_temporary_file_when_replace_fail
         replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
 
     assert path.read_text(encoding="utf-8") == original
+    assert not list(path.parent.glob(f".{path.name}.*"))
+
+
+def test_replace_restores_old_file_and_cleans_all_internal_files_when_directory_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    original = "reader:previous-test-password:user\n"
+    path.write_text(original, encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_fsync = os.fsync
+    directory_fsync_calls = 0
+
+    def fail_only_directory_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise OSError("simulated directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_only_directory_fsync)
+
+    with pytest.raises(OSError, match="simulated directory fsync failure") as error:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    assert "updated-test-password" not in str(error.value)
+    assert path.read_text(encoding="utf-8") == original
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert not list(path.parent.glob(f".{path.name}.*"))
+
+
+def test_replace_removes_new_file_when_directory_fsync_fails_without_previous_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    real_fsync = os.fsync
+
+    def fail_only_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("simulated directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_only_directory_fsync)
+
+    with pytest.raises(OSError, match="simulated directory fsync failure"):
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    assert not path.exists()
     assert not list(path.parent.glob(f".{path.name}.*"))

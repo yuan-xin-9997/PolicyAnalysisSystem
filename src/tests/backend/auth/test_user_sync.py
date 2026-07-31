@@ -7,7 +7,7 @@ from argon2 import PasswordHasher
 from policy_analysis.auth.models import User
 from policy_analysis.auth.service import UserSyncService
 from policy_analysis.core.database import build_engine, create_schema, session_factory
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -74,6 +74,80 @@ def test_sync_skips_unchanged_mtime_without_rehashing(
     assert password_hasher.verify(reader.password_hash, "initial-test-password")
 
 
+def test_sync_processes_new_inode_even_when_mtime_is_unchanged(
+    tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
+) -> None:
+    password_file = tmp_path / "password.txt"
+    initial_mtime_ns = _write_password_file(password_file, "reader:initial-test-password:user\n")
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    service.sync_if_changed()
+    replacement = tmp_path / "replacement.txt"
+    _write_password_file(replacement, "reader:changed-test-password:user\n")
+    os.utime(replacement, ns=(initial_mtime_ns, initial_mtime_ns))
+    os.replace(replacement, password_file)
+
+    assert service.sync_if_changed() is True
+    assert password_hasher.verify(_user(database_sessions, "reader").password_hash, "changed-test-password")
+
+
+def test_sync_retries_after_path_is_replaced_between_snapshot_steps(
+    tmp_path: Path,
+    database_sessions: sessionmaker[Session],
+    password_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_file = tmp_path / "password.txt"
+    _write_password_file(password_file, "reader:initial-test-password:user\n")
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    replacement = tmp_path / "replacement.txt"
+    _write_password_file(replacement, "reader:changed-test-password:user\n")
+    real_open = os.open
+    replaced = False
+
+    def replace_after_open(path: str | os.PathLike[str], flags: int, *args: object) -> int:
+        nonlocal replaced
+        descriptor = real_open(path, flags, *args)
+        if Path(path) == password_file and not replaced:
+            replaced = True
+            os.replace(replacement, password_file)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", replace_after_open)
+
+    assert service.sync_if_changed() is True
+    assert password_hasher.verify(_user(database_sessions, "reader").password_hash, "changed-test-password")
+
+
+def test_sync_failure_does_not_record_fingerprint_and_same_version_retries(
+    tmp_path: Path,
+    database_sessions: sessionmaker[Session],
+    password_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_file = tmp_path / "password.txt"
+    _write_password_file(password_file, "reader:initial-test-password:user\n")
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    real_open = os.open
+    removed = False
+
+    def remove_after_open(path: str | os.PathLike[str], flags: int, *args: object) -> int:
+        nonlocal removed
+        descriptor = real_open(path, flags, *args)
+        if Path(path) == password_file and not removed:
+            removed = True
+            password_file.unlink()
+        return descriptor
+
+    monkeypatch.setattr(os, "open", remove_after_open)
+    with pytest.raises(RuntimeError, match="读取不稳定"):
+        service.sync_if_changed()
+    monkeypatch.setattr(os, "open", real_open)
+    _write_password_file(password_file, "reader:initial-test-password:user\n")
+
+    assert service.sync_if_changed() is True
+    assert _user(database_sessions, "reader").is_active is True
+
+
 def test_sync_updates_password_when_file_changes(
     tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
 ) -> None:
@@ -122,6 +196,29 @@ def test_sync_safely_rehashes_when_existing_hash_cannot_be_verified(
 
     assert service.sync_if_changed() is True
     assert password_hasher.verify(_user(database_sessions, "reader").password_hash, "initial-test-password")
+
+
+def test_sync_rehashes_verified_password_only_when_argon2_parameters_need_upgrade(
+    tmp_path: Path, database_sessions: sessionmaker[Session]
+) -> None:
+    password_file = tmp_path / "password.txt"
+    initial_mtime_ns = _write_password_file(password_file, "reader:initial-test-password:user\n")
+    weak_hasher = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1)
+    current_hasher = PasswordHasher(time_cost=2, memory_cost=8192, parallelism=1)
+    service = UserSyncService(password_file, database_sessions, weak_hasher)
+    service.sync_if_changed()
+    old_hash = _user(database_sessions, "reader").password_hash
+    _write_password_file(password_file, "reader:initial-test-password:user\n", initial_mtime_ns)
+
+    upgraded_service = UserSyncService(password_file, database_sessions, current_hasher)
+    assert upgraded_service.sync_if_changed() is True
+    upgraded_hash = _user(database_sessions, "reader").password_hash
+    assert upgraded_hash != old_hash
+    assert current_hasher.verify(upgraded_hash, "initial-test-password")
+    upgraded_mtime_ns = password_file.stat().st_mtime_ns
+    _write_password_file(password_file, "reader:initial-test-password:user\n", upgraded_mtime_ns)
+    assert upgraded_service.sync_if_changed() is True
+    assert _user(database_sessions, "reader").password_hash == upgraded_hash
 
 
 def test_sync_disables_removed_user_without_deleting_record_and_reenables_it(
@@ -182,3 +279,44 @@ def test_sync_rejects_invalid_file_without_partial_database_update(
     assert reader.password_hash == original_hash
     with database_sessions() as session:
         assert session.scalar(select(User).where(User.username == "new-user")) is None
+
+
+def test_sync_rolls_back_all_users_and_retries_same_fingerprint_after_database_failure(
+    tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
+) -> None:
+    password_file = tmp_path / "password.txt"
+    initial_mtime_ns = _write_password_file(
+        password_file, "reader:initial-test-password:user\nwriter:writer-test-password:user\n"
+    )
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    service.sync_if_changed()
+    old_reader_hash = _user(database_sessions, "reader").password_hash
+    old_writer_hash = _user(database_sessions, "writer").password_hash
+    _write_password_file(
+        password_file,
+        "reader:changed-reader-password:user\nwriter:changed-writer-password:admin\n",
+        initial_mtime_ns,
+    )
+    with database_sessions() as session:
+        session.execute(
+            text(
+                "CREATE TRIGGER abort_writer_update BEFORE UPDATE ON users "
+                "WHEN NEW.username = 'writer' BEGIN SELECT RAISE(ABORT, 'test abort'); END"
+            )
+        )
+        session.commit()
+
+    with pytest.raises(Exception, match="test abort"):
+        service.sync_if_changed()
+
+    assert _user(database_sessions, "reader").password_hash == old_reader_hash
+    assert _user(database_sessions, "writer").password_hash == old_writer_hash
+    with database_sessions() as session:
+        session.execute(text("DROP TRIGGER abort_writer_update"))
+        session.commit()
+
+    assert service.sync_if_changed() is True
+    assert password_hasher.verify(_user(database_sessions, "reader").password_hash, "changed-reader-password")
+    writer = _user(database_sessions, "writer")
+    assert password_hasher.verify(writer.password_hash, "changed-writer-password")
+    assert writer.role == "admin"
