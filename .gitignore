@@ -219,3 +219,12 @@ __marimo__/
 
 # Local Git worktrees
 .worktrees/
+
+# Project-local dependencies and generated output
+.venv/
+node_modules/
+src/app/frontend/dist/
+htmlcov/
+.coverage
+coverage.xml
+src/logs/
