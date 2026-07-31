@@ -1,8 +1,12 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
+import pytest
+from alembic import command
+from alembic.config import Config
 from policy_analysis.auth.models import User
-from policy_analysis.core.database import build_engine, create_schema, session_factory
-from sqlalchemy import inspect, text
+from policy_analysis.core.database import build_engine, create_schema, session_factory, session_scope
+from sqlalchemy import inspect, select, text
 
 
 def test_sqlite_enables_foreign_keys_wal_and_auth_tables(tmp_path) -> None:
@@ -12,6 +16,7 @@ def test_sqlite_enables_foreign_keys_wal_and_auth_tables(tmp_path) -> None:
     with engine.connect() as connection:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
         assert connection.execute(text("PRAGMA journal_mode")).scalar_one().lower() == "wal"
+        assert connection.execute(text("PRAGMA busy_timeout")).scalar_one() == 5000
 
     assert {"users", "page_permissions", "sessions"}.issubset(inspect(engine).get_table_names())
 
@@ -83,3 +88,57 @@ def test_auth_timestamps_round_trip_with_utc_semantics(tmp_path) -> None:
     assert loaded_user is not None
     assert loaded_user.created_at == timestamp
     assert loaded_user.updated_at == timestamp
+
+
+def test_session_scope_commits_successful_work(tmp_path) -> None:
+    engine = build_engine(tmp_path / "app.sqlite3")
+    create_schema(engine)
+    factory = session_factory(engine)
+
+    with session_scope(factory) as session:
+        session.add(User(username="committed-user", password_hash="hash"))
+
+    with factory() as verification_session:
+        saved_user = verification_session.scalar(select(User).where(User.username == "committed-user"))
+
+    assert saved_user is not None
+
+
+def test_session_scope_rolls_back_work_when_block_raises(tmp_path) -> None:
+    engine = build_engine(tmp_path / "app.sqlite3")
+    create_schema(engine)
+    factory = session_factory(engine)
+
+    with pytest.raises(RuntimeError, match="abort transaction"), session_scope(factory) as session:
+        session.add(User(username="rolled-back-user", password_hash="hash"))
+        raise RuntimeError("abort transaction")
+
+    with factory() as verification_session:
+        saved_user = verification_session.scalar(select(User).where(User.username == "rolled-back-user"))
+
+    assert saved_user is None
+
+
+def test_alembic_upgrade_uses_environment_overridden_temporary_database(tmp_path, monkeypatch) -> None:
+    project_root = Path(__file__).resolve().parents[4]
+    database_path = tmp_path / "migrated.sqlite3"
+    default_database_path = project_root / "src/data/app.sqlite3"
+    monkeypatch.setenv("POLICY_ANALYSIS_DATABASE__PATH", str(database_path))
+
+    command.upgrade(Config(str(project_root / "alembic.ini")), "head")
+
+    assert database_path.is_file()
+    assert not default_database_path.exists()
+    engine = build_engine(database_path)
+    inspector = inspect(engine)
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0001"
+    assert {"users", "page_permissions", "sessions"}.issubset(inspector.get_table_names())
+    assert {tuple(item["column_names"]) for item in inspector.get_unique_constraints("users")} >= {
+        ("username",),
+    }
+    assert {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("page_permissions")
+    } >= {("user_id", "page_code")}
+    assert inspector.get_foreign_keys("sessions")[0]["options"]["ondelete"] == "CASCADE"
