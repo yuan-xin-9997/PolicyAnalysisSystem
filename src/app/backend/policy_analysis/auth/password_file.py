@@ -149,15 +149,21 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
             state = recovery.state
             if recovery.errors:
                 # Keep backup_path intact: it is the only durable old version on failed recovery.
+                recovery_result = _recovery_result_error(path, state, backup_path, recovery.errors)
                 raise BaseExceptionGroup(
-                    "密码文件更新和恢复失败", [original_error, *recovery.errors]
+                    "密码文件更新和恢复失败",
+                    [original_error, *recovery.errors, recovery_result],
                 ) from None
             cleanup_errors = _cleanup_errors(backup_path, state, backup_path)
+            recovery_result = _recovery_result_error(path, state, backup_path, tuple(cleanup_errors))
             if cleanup_errors:
                 raise BaseExceptionGroup(
-                    "密码文件更新失败且清理失败", [original_error, *cleanup_errors]
+                    "密码文件更新失败且清理失败",
+                    [original_error, *cleanup_errors, recovery_result],
                 ) from None
-            raise
+            raise BaseExceptionGroup(
+                "密码文件更新失败但恢复完成", [original_error, recovery_result]
+            ) from None
 
         cleanup_errors = _cleanup_errors(temporary_path, state, backup_path)
         if state is _UpdateState.NOT_REPLACED:
@@ -179,18 +185,10 @@ def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> _R
             return _RecoveryOutcome(_UpdateState.REPLACED_PENDING_DURABILITY, (error,))
         try:
             _fsync_directory(path.parent)
-        except BaseException:
+        except BaseException as recovery_fsync_error:
             return _RecoveryOutcome(
                 _UpdateState.RESTORED_PENDING_DURABILITY,
-                (
-                    PasswordFileOperationError(
-                        "密码文件恢复持久化失败",
-                        target_state=_UpdateState.RESTORED_PENDING_DURABILITY.value,
-                        backup_path=None,
-                        residual_paths=(),
-                        uncertain_paths=(path,),
-                    ),
-                ),
+                (recovery_fsync_error,),
             )
         return _RecoveryOutcome(_UpdateState.RESTORED)
 
@@ -224,6 +222,51 @@ def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> _R
         # Preserve the designated recovery fsync failure even if cleanup's directory fsync succeeds.
         return _RecoveryOutcome(_UpdateState.RESTORED_PENDING_DURABILITY, (recovery_fsync_error,))
     return _RecoveryOutcome(_UpdateState.RESTORED)
+
+
+def _recovery_result_error(
+    path: Path,
+    state: _UpdateState,
+    backup_path: Path | None,
+    related_errors: tuple[BaseException, ...],
+) -> PasswordFileOperationError:
+    residual_paths: list[Path] = []
+    uncertain_paths: list[Path] = []
+    if state in {
+        _UpdateState.REPLACED_PENDING_DURABILITY,
+        _UpdateState.RESTORED_PENDING_DURABILITY,
+    }:
+        uncertain_paths.append(path)
+    for error in related_errors:
+        for operation_error in _nested_operation_errors(error):
+            residual_paths.extend(operation_error.residual_paths)
+            uncertain_paths.extend(operation_error.uncertain_paths)
+    final_residual_paths = tuple(dict.fromkeys(residual_paths))
+    final_uncertain_paths = tuple(dict.fromkeys(uncertain_paths))
+    final_backup_path = backup_path
+    if final_backup_path is not None and not (
+        os.path.lexists(final_backup_path)
+        or final_backup_path in final_residual_paths
+        or final_backup_path in final_uncertain_paths
+    ):
+        final_backup_path = None
+    return PasswordFileOperationError(
+        "密码文件恢复结果",
+        target_state=state.value,
+        backup_path=final_backup_path,
+        residual_paths=final_residual_paths,
+        uncertain_paths=final_uncertain_paths,
+    )
+
+
+def _nested_operation_errors(error: BaseException) -> tuple[PasswordFileOperationError, ...]:
+    result: list[PasswordFileOperationError] = []
+    if isinstance(error, PasswordFileOperationError):
+        result.append(error)
+    if isinstance(error, BaseExceptionGroup):
+        for nested in error.exceptions:
+            result.extend(_nested_operation_errors(nested))
+    return tuple(result)
 
 
 def _read_private_file(path: Path) -> bytes:
