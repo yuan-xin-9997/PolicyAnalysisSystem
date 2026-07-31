@@ -174,7 +174,9 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
 
     cleanup_errors = _cleanup_errors(backup_path, state, backup_path)
     if cleanup_errors:
-        raise cleanup_errors[0] from None
+        if len(cleanup_errors) == 1:
+            raise cleanup_errors[0] from None
+        raise BaseExceptionGroup("密码文件清理中断", cleanup_errors) from None
 
 
 def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> _RecoveryOutcome:
@@ -338,25 +340,24 @@ def _read_all(descriptor: int) -> bytes:
     return b"".join(chunks)
 
 
-def _cleanup_errors(
-    path: Path | None, state: _UpdateState, backup_path: Path | None
-) -> list[PasswordFileOperationError]:
+def _cleanup_errors(path: Path | None, state: _UpdateState, backup_path: Path | None) -> list[BaseException]:
     if path is None:
         return []
     try:
         path.unlink(missing_ok=True)
         _fsync_directory(path.parent)
-    except OSError:
+    except BaseException as cleanup_error:
         residual_paths = (path,) if os.path.lexists(path) else ()
-        return [
-            PasswordFileOperationError(
-                "密码文件清理失败",
-                target_state=state.value,
-                backup_path=backup_path,
-                residual_paths=residual_paths,
-                uncertain_paths=() if residual_paths else (path,),
-            )
-        ]
+        operation_error = PasswordFileOperationError(
+            "密码文件清理失败",
+            target_state=state.value,
+            backup_path=backup_path,
+            residual_paths=residual_paths,
+            uncertain_paths=() if residual_paths else (path,),
+        )
+        if isinstance(cleanup_error, OSError):
+            return [operation_error]
+        return [cleanup_error, operation_error]
     return []
 
 

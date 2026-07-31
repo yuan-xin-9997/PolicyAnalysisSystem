@@ -470,6 +470,189 @@ def _cleanup_errors_in_tree(error: BaseException) -> list[PasswordFileOperationE
     return [node for node in _operation_errors(error) if str(node) == "密码文件清理失败"]
 
 
+@pytest.mark.parametrize(
+    "cleanup_interrupt",
+    [KeyboardInterrupt("backup cleanup interrupted"), SystemExit("backup cleanup interrupted")],
+)
+def test_recovered_backup_cleanup_interrupt_preserves_errors_and_final_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_interrupt: BaseException,
+) -> None:
+    path = tmp_path / "password.txt"
+    original = "reader:previous-test-password:user\n"
+    path.write_text(original, encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_fsync = os.fsync
+    real_unlink = Path.unlink
+    update_error = OSError("update fsync failure marker")
+    directory_fsync_calls = 0
+
+    def fail_update_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise update_error
+        real_fsync(descriptor)
+
+    def interrupt_backup_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+        if ".backup." in candidate.name:
+            raise cleanup_interrupt
+        real_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fsync", fail_update_fsync)
+    monkeypatch.setattr(Path, "unlink", interrupt_backup_unlink)
+
+    captured: BaseException | None = None
+    try:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+    except BaseException as error:
+        captured = error
+
+    assert isinstance(captured, BaseExceptionGroup)
+    tree = _exception_tree(captured)
+    assert any(error is update_error for error in tree)
+    assert any(error is cleanup_interrupt for error in tree)
+    cleanup_errors = _cleanup_errors_in_tree(captured)
+    assert len(cleanup_errors) == 1
+    cleanup = cleanup_errors[0]
+    results = _recovery_result_errors(captured)
+    assert len(results) == 1
+    result = results[0]
+    backups = tuple(path.parent.glob(f".{path.name}.backup.*"))
+    assert cleanup.target_state == result.target_state == "restored"
+    assert cleanup.backup_path == result.backup_path
+    assert result.backup_path is not None and backups == (result.backup_path,)
+    assert cleanup.residual_paths == result.residual_paths == (result.backup_path,)
+    assert cleanup.uncertain_paths == result.uncertain_paths == ()
+    assert result.durability_state == "durable"
+    assert path.read_text(encoding="utf-8") == original
+    assert not tuple(path.parent.glob(f".{path.name}.restore.*"))
+    _assert_exception_graph_has_no_values(
+        captured, ("reader", "previous-test-password", "updated-test-password")
+    )
+
+
+@pytest.mark.parametrize(
+    "cleanup_interrupt",
+    [KeyboardInterrupt("restore cleanup interrupted"), SystemExit("restore cleanup interrupted")],
+)
+def test_restore_temp_cleanup_interrupt_preserves_update_recovery_and_final_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_interrupt: BaseException,
+) -> None:
+    path = tmp_path / "password.txt"
+    updated = PasswordEntry("reader", "updated-test-password", "user")
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_replace = os.replace
+    real_fsync = os.fsync
+    update_error = OSError("update fsync failure marker")
+    recovery_error = OSError("recovery replace failure marker")
+    replace_calls = 0
+    directory_fsync_calls = 0
+
+    def fail_recovery_replace(source: object, destination: object) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            real_replace(source, destination)
+            return
+        raise recovery_error
+
+    def interrupt_restore_cleanup_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise update_error
+            if directory_fsync_calls == 3:
+                raise cleanup_interrupt
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "replace", fail_recovery_replace)
+    monkeypatch.setattr(os, "fsync", interrupt_restore_cleanup_fsync)
+
+    captured: BaseException | None = None
+    try:
+        replace_password_file(path, [updated])
+    except BaseException as error:
+        captured = error
+
+    assert isinstance(captured, BaseExceptionGroup)
+    tree = _exception_tree(captured)
+    assert any(error is update_error for error in tree)
+    assert any(error is recovery_error for error in tree)
+    assert any(error is cleanup_interrupt for error in tree)
+    cleanup_errors = _cleanup_errors_in_tree(captured)
+    assert len(cleanup_errors) == 1
+    cleanup = cleanup_errors[0]
+    results = _recovery_result_errors(captured)
+    assert len(results) == 1
+    result = results[0]
+    backups = tuple(path.parent.glob(f".{path.name}.backup.*"))
+    assert cleanup.target_state == result.target_state == "replaced_pending_durability"
+    assert cleanup.backup_path == result.backup_path
+    assert result.backup_path is not None and backups == (result.backup_path,)
+    assert cleanup.residual_paths == result.residual_paths == ()
+    assert len(cleanup.uncertain_paths) == 1
+    assert ".restore." in cleanup.uncertain_paths[0].name
+    assert result.uncertain_paths == (path, cleanup.uncertain_paths[0])
+    assert result.durability_state == "uncertain"
+    assert parse_password_text(path.read_text(encoding="utf-8")) == [updated]
+    assert not tuple(path.parent.glob(f".{path.name}.restore.*"))
+    _assert_exception_graph_has_no_values(
+        captured, ("reader", "previous-test-password", "updated-test-password")
+    )
+
+
+@pytest.mark.parametrize(
+    "cleanup_interrupt",
+    [KeyboardInterrupt("persisted cleanup interrupted"), SystemExit("persisted cleanup interrupted")],
+)
+def test_persisted_backup_cleanup_interrupt_groups_raw_and_structured_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_interrupt: BaseException,
+) -> None:
+    path = tmp_path / "password.txt"
+    updated = PasswordEntry("reader", "updated-test-password", "user")
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_unlink = Path.unlink
+
+    def interrupt_backup_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+        if ".backup." in candidate.name:
+            raise cleanup_interrupt
+        real_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", interrupt_backup_unlink)
+
+    captured: BaseException | None = None
+    try:
+        replace_password_file(path, [updated])
+    except BaseException as error:
+        captured = error
+
+    assert isinstance(captured, BaseExceptionGroup)
+    tree = _exception_tree(captured)
+    assert any(error is cleanup_interrupt for error in tree)
+    cleanup_errors = _cleanup_errors_in_tree(captured)
+    assert len(cleanup_errors) == 1
+    cleanup = cleanup_errors[0]
+    assert cleanup.target_state == "persisted"
+    assert cleanup.backup_path is not None and cleanup.backup_path.exists()
+    assert cleanup.residual_paths == (cleanup.backup_path,)
+    assert cleanup.uncertain_paths == ()
+    assert parse_password_text(path.read_text(encoding="utf-8")) == [updated]
+    assert not _recovery_result_errors(captured)
+    _assert_exception_graph_has_no_values(
+        captured, ("reader", "previous-test-password", "updated-test-password")
+    )
+
+
 def test_recovery_replace_failure_with_successful_temp_cleanup_exposes_final_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
