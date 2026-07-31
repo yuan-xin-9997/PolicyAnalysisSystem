@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
 import unicodedata
-from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -20,6 +20,22 @@ _ROLE_HELP = "# admin 默认拥有所有页面权限；user 的页面权限由�
 
 class PasswordFileError(RuntimeError):
     """A credential-file error whose message never includes credential values."""
+
+
+class PasswordFileOperationError(PasswordFileError):
+    """Safe, structured operational state for controlled credential-file recovery."""
+
+    def __init__(
+        self,
+        message: str,
+        target_state: str,
+        backup_path: Path | None,
+        residual_paths: tuple[Path, ...],
+    ):
+        super().__init__(message)
+        self.target_state = target_state
+        self.backup_path = backup_path
+        self.residual_paths = residual_paths
 
 
 class _UpdateState(Enum):
@@ -96,11 +112,16 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
                 raise ExceptionGroup("密码文件更新失败且清理失败", [original_error, cleanup_error]) from None
         raise
     finally:
-        _unlink_quietly(temporary_path)
+        cleanup_errors = _cleanup_errors(temporary_path, state, backup_path)
         if state is _UpdateState.PERSISTED:
             _remove_backup_after_success(backup_path)
         elif state is _UpdateState.NOT_REPLACED:
-            _unlink_quietly(backup_path)
+            cleanup_errors.extend(_cleanup_errors(backup_path, state, backup_path))
+        if cleanup_errors:
+            active_error = sys.exception()
+            if active_error is not None:
+                raise ExceptionGroup("密码文件操作与清理失败", [active_error, *cleanup_errors]) from None
+            raise cleanup_errors[0]
 
 
 def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> Exception | None:
@@ -115,7 +136,9 @@ def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> Ex
                 os.replace(recovery_path, path)
                 _fsync_directory(path.parent)
             finally:
-                _unlink_quietly(recovery_path)
+                cleanup_errors = _cleanup_errors(recovery_path, _UpdateState.RESTORED, backup_path)
+                if cleanup_errors:
+                    raise cleanup_errors[0]
         else:
             path.unlink(missing_ok=True)
             _fsync_directory(path.parent)
@@ -159,14 +182,21 @@ def _read_private_file(path: Path) -> bytes:
 def _write_private_copy(directory: Path, prefix: str, contents: bytes) -> Path:
     descriptor, temporary_name = tempfile.mkstemp(prefix=prefix, dir=directory)
     result = Path(temporary_name)
+    owns_descriptor = True
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
+        handle = os.fdopen(descriptor, "wb")
+        owns_descriptor = False
+        with handle:
+            _set_private_mode(handle.fileno())
             handle.write(contents)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
-        _unlink_quietly(result)
+    except Exception as original_error:
+        if owns_descriptor:
+            os.close(descriptor)
+        cleanup_errors = _cleanup_errors(result, _UpdateState.NOT_REPLACED, None)
+        if cleanup_errors:
+            raise ExceptionGroup("密码文件写入与清理失败", [original_error, *cleanup_errors]) from None
         raise
     return result
 
@@ -180,7 +210,9 @@ def _assert_regular_private(path: Path) -> None:
 
 
 def _assert_private_regular_stat(status: os.stat_result) -> None:
-    if not stat.S_ISREG(status.st_mode) or stat.S_IMODE(status.st_mode) != 0o600:
+    if not stat.S_ISREG(status.st_mode) or (
+        _uses_posix_file_security() and stat.S_IMODE(status.st_mode) != 0o600
+    ):
         raise PasswordFileError("凭据文件类型或权限无效")
 
 
@@ -191,18 +223,44 @@ def _read_all(descriptor: int) -> bytes:
     return b"".join(chunks)
 
 
-def _unlink_quietly(path: Path | None) -> None:
-    if path is not None:
-        with suppress(OSError):
-            path.unlink(missing_ok=True)
+def _cleanup_errors(
+    path: Path | None, state: _UpdateState, backup_path: Path | None
+) -> list[PasswordFileOperationError]:
+    if path is None:
+        return []
+    try:
+        path.unlink(missing_ok=True)
+        _fsync_directory(path.parent)
+    except OSError:
+        residual_paths = (path,) if path.exists() else ()
+        return [
+            PasswordFileOperationError(
+                "密码文件清理失败",
+                target_state=state.name.lower(),
+                backup_path=backup_path,
+                residual_paths=residual_paths,
+            )
+        ]
+    return []
 
 
 def _fsync_directory(directory: Path) -> None:
+    if not _uses_posix_file_security():
+        return
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _uses_posix_file_security() -> bool:
+    return os.name == "posix"
+
+
+def _set_private_mode(descriptor: int) -> None:
+    if _uses_posix_file_security():
+        os.fchmod(descriptor, 0o600)
 
 
 def _validate_entry(entry: PasswordEntry, usernames: set[str], position: str) -> None:

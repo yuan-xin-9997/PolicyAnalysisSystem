@@ -47,12 +47,18 @@ class UserSyncService:
             return False
 
         entries = parse_password_text(contents.decode("utf-8"))
+        if not self._synchronize_transaction(entries):
+            raise PasswordSyncError("密码同步数据库操作失败") from None
+        self._last_fingerprint = fingerprint
+        return True
+
+    def _synchronize_transaction(self, entries: list[PasswordEntry]) -> bool:
+        """Return a safe failure signal after the SQLAlchemy exception has unwound."""
         try:
             with session_scope(self._sessions) as session:
                 self._synchronize(UserRepository(session), entries)
         except SQLAlchemyError:
-            raise PasswordSyncError("密码同步数据库操作失败") from None
-        self._last_fingerprint = fingerprint
+            return False
         return True
 
     def _read_stable_snapshot(self) -> tuple[bytes, _PasswordFileFingerprint]:

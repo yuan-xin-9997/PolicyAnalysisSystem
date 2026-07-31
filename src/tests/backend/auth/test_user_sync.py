@@ -313,6 +313,9 @@ def test_sync_rolls_back_all_users_and_retries_same_fingerprint_after_database_f
     assert "changed-reader-password" not in str(error.value)
     assert "changed-writer-password" not in repr(error.value)
     assert "argon2" not in repr(error.value).lower()
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert vars(error.value) == {}
 
     assert _user(database_sessions, "reader").password_hash == old_reader_hash
     assert _user(database_sessions, "writer").password_hash == old_writer_hash
