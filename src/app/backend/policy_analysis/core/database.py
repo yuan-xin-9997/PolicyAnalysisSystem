@@ -15,6 +15,7 @@ def build_engine(database_path: Path) -> Engine:
     engine = create_engine(
         f"sqlite+pysqlite:///{database_path}",
         connect_args={"check_same_thread": False},
+        hide_parameters=True,
     )
 
     @event.listens_for(engine, "connect")

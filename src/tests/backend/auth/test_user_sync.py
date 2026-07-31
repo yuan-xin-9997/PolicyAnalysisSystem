@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from argon2 import PasswordHasher
 from policy_analysis.auth.models import User
-from policy_analysis.auth.service import UserSyncService
+from policy_analysis.auth.service import PasswordSyncError, UserSyncService
 from policy_analysis.core.database import build_engine, create_schema, session_factory
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,6 +25,7 @@ def database_sessions(tmp_path: Path) -> sessionmaker[Session]:
 
 def _write_password_file(path: Path, text: str, previous_mtime_ns: int | None = None) -> int:
     path.write_text(text, encoding="utf-8")
+    os.chmod(path, 0o600)
     if previous_mtime_ns is not None:
         os.utime(path, ns=(previous_mtime_ns, previous_mtime_ns + 1))
     return path.stat().st_mtime_ns
@@ -306,8 +307,12 @@ def test_sync_rolls_back_all_users_and_retries_same_fingerprint_after_database_f
         )
         session.commit()
 
-    with pytest.raises(Exception, match="test abort"):
+    with pytest.raises(PasswordSyncError) as error:
         service.sync_if_changed()
+
+    assert "changed-reader-password" not in str(error.value)
+    assert "changed-writer-password" not in repr(error.value)
+    assert "argon2" not in repr(error.value).lower()
 
     assert _user(database_sessions, "reader").password_hash == old_reader_hash
     assert _user(database_sessions, "writer").password_hash == old_writer_hash
@@ -320,3 +325,27 @@ def test_sync_rolls_back_all_users_and_retries_same_fingerprint_after_database_f
     writer = _user(database_sessions, "writer")
     assert password_hasher.verify(writer.password_hash, "changed-writer-password")
     assert writer.role == "admin"
+
+
+def test_sync_rejects_insecure_permissions_symlink_and_fifo_before_reading(
+    tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
+) -> None:
+    password_file = tmp_path / "password.txt"
+    _write_password_file(password_file, "reader:initial-test-password:user\n")
+    os.chmod(password_file, 0o644)
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    with pytest.raises(RuntimeError, match="凭据文件"):
+        service.sync_if_changed()
+
+    target = tmp_path / "target.txt"
+    _write_password_file(target, "reader:initial-test-password:user\n")
+    password_file.unlink()
+    password_file.symlink_to(target)
+    with pytest.raises(RuntimeError, match="凭据文件"):
+        service.sync_if_changed()
+    assert target.read_text(encoding="utf-8") == "reader:initial-test-password:user\n"
+
+    password_file.unlink()
+    os.mkfifo(password_file)
+    with pytest.raises(RuntimeError, match="凭据文件"):
+        service.sync_if_changed()

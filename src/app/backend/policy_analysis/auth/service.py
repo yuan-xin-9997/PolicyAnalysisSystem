@@ -9,12 +9,21 @@ from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from policy_analysis.auth.models import User
-from policy_analysis.auth.password_file import PasswordEntry, parse_password_text
+from policy_analysis.auth.password_file import (
+    PasswordEntry,
+    _assert_private_regular_stat,
+    parse_password_text,
+)
 from policy_analysis.auth.repository import UserRepository
 from policy_analysis.core.database import session_scope
+
+
+class PasswordSyncError(RuntimeError):
+    """Safe domain error for database failures during credential synchronization."""
 
 
 class UserSyncService:
@@ -38,25 +47,34 @@ class UserSyncService:
             return False
 
         entries = parse_password_text(contents.decode("utf-8"))
-        with session_scope(self._sessions) as session:
-            self._synchronize(UserRepository(session), entries)
+        try:
+            with session_scope(self._sessions) as session:
+                self._synchronize(UserRepository(session), entries)
+        except SQLAlchemyError:
+            raise PasswordSyncError("密码同步数据库操作失败") from None
         self._last_fingerprint = fingerprint
         return True
 
     def _read_stable_snapshot(self) -> tuple[bytes, _PasswordFileFingerprint]:
         for _ in range(2):
             try:
-                before = _PasswordFileFingerprint.from_stat(self._password_file.stat())
-                descriptor = os.open(self._password_file, os.O_RDONLY)
+                before_status = self._password_file.lstat()
+                _assert_private_regular_stat(before_status)
+                before = _PasswordFileFingerprint.from_stat(before_status)
+                descriptor = os.open(self._password_file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
                 try:
-                    opened = _PasswordFileFingerprint.from_stat(os.fstat(descriptor))
+                    opened_status = os.fstat(descriptor)
+                    _assert_private_regular_stat(opened_status)
+                    opened = _PasswordFileFingerprint.from_stat(opened_status)
                     chunks: list[bytes] = []
                     while chunk := os.read(descriptor, 64 * 1024):
                         chunks.append(chunk)
                     after_read = _PasswordFileFingerprint.from_stat(os.fstat(descriptor))
                 finally:
                     os.close(descriptor)
-                current = _PasswordFileFingerprint.from_stat(self._password_file.stat())
+                current_status = self._password_file.lstat()
+                _assert_private_regular_stat(current_status)
+                current = _PasswordFileFingerprint.from_stat(current_status)
             except OSError:
                 continue
             if before == opened == after_read == current:

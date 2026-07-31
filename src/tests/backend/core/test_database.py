@@ -22,6 +22,12 @@ def test_sqlite_enables_foreign_keys_wal_and_auth_tables(tmp_path) -> None:
     assert {"users", "page_permissions", "sessions"}.issubset(inspect(engine).get_table_names())
 
 
+def test_sqlite_engine_hides_bound_parameters(tmp_path) -> None:
+    engine = build_engine(tmp_path / "app.sqlite3")
+
+    assert engine.hide_parameters is True
+
+
 def test_auth_schema_enforces_unique_keys_and_cascading_foreign_keys(tmp_path) -> None:
     engine = build_engine(tmp_path / "app.sqlite3")
     create_schema(engine)
