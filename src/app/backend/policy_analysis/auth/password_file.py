@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
 import tempfile
 import unicodedata
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 Role = Literal["admin", "user"]
+TargetState = Literal[
+    "not_replaced",
+    "replaced_pending_durability",
+    "restored_pending_durability",
+    "restored",
+    "persisted",
+]
+DurabilityState = Literal["durable", "uncertain"]
 
 _HEADER = "# 格式: username:password:role  (role 取值: admin | user)"
 _ROLE_HELP = "# admin 默认拥有所有页面权限；user 的页面权限由管理员配置。"
@@ -28,21 +35,54 @@ class PasswordFileOperationError(PasswordFileError):
     def __init__(
         self,
         message: str,
-        target_state: str,
+        target_state: TargetState,
         backup_path: Path | None,
         residual_paths: tuple[Path, ...],
+        uncertain_paths: tuple[Path, ...] = (),
     ):
         super().__init__(message)
         self.target_state = target_state
         self.backup_path = backup_path
         self.residual_paths = residual_paths
+        self.uncertain_paths = uncertain_paths
+        self.durability_state: DurabilityState = (
+            "uncertain" if target_state.endswith("pending_durability") or uncertain_paths else "durable"
+        )
 
 
 class _UpdateState(Enum):
-    NOT_REPLACED = auto()
-    REPLACED_PENDING_DURABILITY = auto()
-    RESTORED = auto()
-    PERSISTED = auto()
+    NOT_REPLACED = "not_replaced"
+    REPLACED_PENDING_DURABILITY = "replaced_pending_durability"
+    RESTORED_PENDING_DURABILITY = "restored_pending_durability"
+    RESTORED = "restored"
+    PERSISTED = "persisted"
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoveryOutcome:
+    state: _UpdateState
+    errors: tuple[BaseException, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PrivateFileFingerprint:
+    device: int
+    inode: int
+    mode: int
+    mtime_ns: int
+    ctime_ns: int
+    size: int
+
+    @classmethod
+    def from_stat(cls, status: os.stat_result) -> _PrivateFileFingerprint:
+        return cls(
+            device=status.st_dev,
+            inode=status.st_ino,
+            mode=status.st_mode,
+            mtime_ns=status.st_mtime_ns,
+            ctime_ns=status.st_ctime_ns,
+            size=status.st_size,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +122,10 @@ def render_password_text(entries: list[PasswordEntry]) -> str:
 
 def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
     """Replace credentials atomically, retaining a recovery copy until durable."""
-    rendered = render_password_text(entries).encode("utf-8")
+    rendered_text = render_password_text(entries)
+    rendered = _encode_utf8_or_none(rendered_text)
+    if rendered is None:
+        raise PasswordFileError("密码文件编码无效")
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_path: Path | None = None
     temporary_path: Path | None = None
@@ -91,7 +134,7 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
 
     try:
         if existed:
-            _assert_regular_private(path)
+            _assert_private_regular(path)
             backup_path = _write_private_copy(path.parent, f".{path.name}.backup.", _read_private_file(path))
             _fsync_directory(path.parent)
         temporary_path = _write_private_copy(path.parent, f".{path.name}.tmp.", rendered)
@@ -100,83 +143,111 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
         state = _UpdateState.REPLACED_PENDING_DURABILITY
         _fsync_directory(path.parent)
         state = _UpdateState.PERSISTED
-    except Exception as original_error:
+    except BaseException as original_error:
         if state is _UpdateState.REPLACED_PENDING_DURABILITY:
-            recovery_error = _restore_previous(path, backup_path, existed)
-            if recovery_error is not None:
+            recovery = _restore_previous(path, backup_path, existed)
+            state = recovery.state
+            if recovery.errors:
                 # Keep backup_path intact: it is the only durable old version on failed recovery.
-                raise ExceptionGroup("密码文件更新和恢复失败", [original_error, recovery_error]) from None
-            state = _UpdateState.RESTORED
-            cleanup_error = _remove_backup_after_recovery(backup_path)
-            if cleanup_error is not None:
-                raise ExceptionGroup("密码文件更新失败且清理失败", [original_error, cleanup_error]) from None
-        raise
-    finally:
+                raise BaseExceptionGroup(
+                    "密码文件更新和恢复失败", [original_error, *recovery.errors]
+                ) from None
+            cleanup_errors = _cleanup_errors(backup_path, state, backup_path)
+            if cleanup_errors:
+                raise BaseExceptionGroup(
+                    "密码文件更新失败且清理失败", [original_error, *cleanup_errors]
+                ) from None
+            raise
+
         cleanup_errors = _cleanup_errors(temporary_path, state, backup_path)
-        if state is _UpdateState.PERSISTED:
-            _remove_backup_after_success(backup_path)
-        elif state is _UpdateState.NOT_REPLACED:
+        if state is _UpdateState.NOT_REPLACED:
             cleanup_errors.extend(_cleanup_errors(backup_path, state, backup_path))
         if cleanup_errors:
-            active_error = sys.exception()
-            if active_error is not None:
-                raise ExceptionGroup("密码文件操作与清理失败", [active_error, *cleanup_errors]) from None
-            raise cleanup_errors[0]
+            raise BaseExceptionGroup("密码文件操作与清理失败", [original_error, *cleanup_errors]) from None
+        raise
+
+    cleanup_errors = _cleanup_errors(backup_path, state, backup_path)
+    if cleanup_errors:
+        raise cleanup_errors[0] from None
 
 
-def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> Exception | None:
-    try:
-        if existed:
-            if backup_path is None:
-                return PasswordFileError("密码文件恢复失败")
-            recovery_path = _write_private_copy(
-                path.parent, f".{path.name}.restore.", _read_private_file(backup_path)
-            )
-            try:
-                os.replace(recovery_path, path)
-                _fsync_directory(path.parent)
-            finally:
-                cleanup_errors = _cleanup_errors(recovery_path, _UpdateState.RESTORED, backup_path)
-                if cleanup_errors:
-                    raise cleanup_errors[0]
-        else:
+def _restore_previous(path: Path, backup_path: Path | None, existed: bool) -> _RecoveryOutcome:
+    if not existed:
+        try:
             path.unlink(missing_ok=True)
+        except BaseException as error:
+            return _RecoveryOutcome(_UpdateState.REPLACED_PENDING_DURABILITY, (error,))
+        try:
             _fsync_directory(path.parent)
-    except Exception as error:
-        return error
-    return None
+        except BaseException:
+            return _RecoveryOutcome(
+                _UpdateState.RESTORED_PENDING_DURABILITY,
+                (
+                    PasswordFileOperationError(
+                        "密码文件恢复持久化失败",
+                        target_state=_UpdateState.RESTORED_PENDING_DURABILITY.value,
+                        backup_path=None,
+                        residual_paths=(),
+                        uncertain_paths=(path,),
+                    ),
+                ),
+            )
+        return _RecoveryOutcome(_UpdateState.RESTORED)
 
-
-def _remove_backup_after_success(backup_path: Path | None) -> None:
     if backup_path is None:
-        return
+        return _RecoveryOutcome(
+            _UpdateState.REPLACED_PENDING_DURABILITY,
+            (PasswordFileError("密码文件恢复失败"),),
+        )
     try:
-        backup_path.unlink()
-        _fsync_directory(backup_path.parent)
-    except OSError as error:
-        raise PasswordFileError("密码文件更新已持久化，但清理失败") from error
+        recovery_path = _write_private_copy(
+            path.parent, f".{path.name}.restore.", _read_private_file(backup_path)
+        )
+    except BaseException as error:
+        return _RecoveryOutcome(_UpdateState.REPLACED_PENDING_DURABILITY, (error,))
 
-
-def _remove_backup_after_recovery(backup_path: Path | None) -> OSError | None:
-    if backup_path is None:
-        return None
     try:
-        backup_path.unlink()
-        _fsync_directory(backup_path.parent)
-    except OSError as error:
-        # The update itself already failed; retaining a private backup is safer than hiding it.
-        return error
-    return None
+        os.replace(recovery_path, path)
+    except BaseException as error:
+        cleanup_errors = _cleanup_errors(recovery_path, _UpdateState.REPLACED_PENDING_DURABILITY, backup_path)
+        return _RecoveryOutcome(_UpdateState.REPLACED_PENDING_DURABILITY, (error, *cleanup_errors))
+
+    try:
+        _fsync_directory(path.parent)
+    except BaseException as recovery_fsync_error:
+        cleanup_errors = _cleanup_errors(recovery_path, _UpdateState.RESTORED_PENDING_DURABILITY, backup_path)
+        if cleanup_errors:
+            return _RecoveryOutcome(
+                _UpdateState.RESTORED_PENDING_DURABILITY,
+                (recovery_fsync_error, *cleanup_errors),
+            )
+        # Preserve the designated recovery fsync failure even if cleanup's directory fsync succeeds.
+        return _RecoveryOutcome(_UpdateState.RESTORED_PENDING_DURABILITY, (recovery_fsync_error,))
+    return _RecoveryOutcome(_UpdateState.RESTORED)
 
 
 def _read_private_file(path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    expected = _assert_private_regular(path)
     try:
-        _assert_private_regular_stat(os.fstat(descriptor))
-        return _read_all(descriptor)
+        descriptor = os.open(path, _private_read_flags())
+    except OSError as error:
+        raise PasswordFileError("凭据文件不可用") from error
+    try:
+        opened_status = os.fstat(descriptor)
+        _assert_private_regular_stat(opened_status)
+        opened = _PrivateFileFingerprint.from_stat(opened_status)
+        if opened != expected:
+            raise PasswordFileError("凭据文件读取不稳定")
+        contents = _read_all(descriptor)
+        after_read_status = os.fstat(descriptor)
+        _assert_private_regular_stat(after_read_status)
+        after_read = _PrivateFileFingerprint.from_stat(after_read_status)
     finally:
         os.close(descriptor)
+    current = _assert_private_regular(path)
+    if expected != opened or opened != after_read or after_read != current:
+        raise PasswordFileError("凭据文件读取不稳定")
+    return contents
 
 
 def _write_private_copy(directory: Path, prefix: str, contents: bytes) -> Path:
@@ -191,22 +262,23 @@ def _write_private_copy(directory: Path, prefix: str, contents: bytes) -> Path:
             handle.write(contents)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception as original_error:
+    except BaseException as original_error:
         if owns_descriptor:
             os.close(descriptor)
         cleanup_errors = _cleanup_errors(result, _UpdateState.NOT_REPLACED, None)
         if cleanup_errors:
-            raise ExceptionGroup("密码文件写入与清理失败", [original_error, *cleanup_errors]) from None
+            raise BaseExceptionGroup("密码文件写入与清理失败", [original_error, *cleanup_errors]) from None
         raise
     return result
 
 
-def _assert_regular_private(path: Path) -> None:
+def _assert_private_regular(path: Path) -> _PrivateFileFingerprint:
     try:
         status = path.lstat()
     except OSError as error:
         raise PasswordFileError("凭据文件不可用") from error
     _assert_private_regular_stat(status)
+    return _PrivateFileFingerprint.from_stat(status)
 
 
 def _assert_private_regular_stat(status: os.stat_result) -> None:
@@ -232,13 +304,14 @@ def _cleanup_errors(
         path.unlink(missing_ok=True)
         _fsync_directory(path.parent)
     except OSError:
-        residual_paths = (path,) if path.exists() else ()
+        residual_paths = (path,) if os.path.lexists(path) else ()
         return [
             PasswordFileOperationError(
                 "密码文件清理失败",
-                target_state=state.name.lower(),
+                target_state=state.value,
                 backup_path=backup_path,
                 residual_paths=residual_paths,
+                uncertain_paths=() if residual_paths else (path,),
             )
         ]
     return []
@@ -256,6 +329,14 @@ def _fsync_directory(directory: Path) -> None:
 
 def _uses_posix_file_security() -> bool:
     return os.name == "posix"
+
+
+def _supports_o_nofollow() -> bool:
+    return hasattr(os, "O_NOFOLLOW")
+
+
+def _private_read_flags() -> int:
+    return os.O_RDONLY | (os.O_NOFOLLOW if _supports_o_nofollow() else 0)
 
 
 def _set_private_mode(descriptor: int) -> None:
@@ -283,6 +364,13 @@ def _validate_entry(entry: PasswordEntry, usernames: set[str], position: str) ->
 
 def _contains_unsafe_character(value: str) -> bool:
     return any(
-        character in {"\r", "\n"} or unicodedata.category(character) in {"Cc", "Zl", "Zp"}
+        character in {"\r", "\n"} or unicodedata.category(character) in {"Cc", "Cs", "Zl", "Zp"}
         for character in value
     )
+
+
+def _encode_utf8_or_none(value: str) -> bytes | None:
+    try:
+        return value.encode("utf-8")
+    except UnicodeError:
+        return None

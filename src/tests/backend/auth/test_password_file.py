@@ -8,6 +8,7 @@ import pytest
 from policy_analysis.auth.password_file import (
     PasswordEntry,
     PasswordFileError,
+    PasswordFileOperationError,
     parse_password_text,
     render_password_text,
     replace_password_file,
@@ -89,6 +90,50 @@ def test_render_rejects_duplicates_and_parse_render_round_trips_exact_entries() 
         render_password_text([entries[0], entries[0]])
 
     assert parse_password_text(render_password_text(entries)) == entries
+
+
+@pytest.mark.parametrize("value", ["reader\ud800", "password\ud800"])
+def test_render_rejects_lone_surrogate_without_exposing_it(value: str) -> None:
+    entry = (
+        PasswordEntry(value, "safe-test-password", "user")
+        if value.startswith("reader")
+        else PasswordEntry("reader", value, "user")
+    )
+
+    with pytest.raises(ValueError) as error:
+        render_password_text([entry])
+
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert "safe-test-password" not in repr(error.value)
+    _assert_exception_graph_has_no_values(error.value, (value, "safe-test-password"))
+
+
+def test_encode_failure_is_converted_outside_unicode_context_without_retaining_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    username = "reader\ud800"
+    password = "private-test-password\ud800"
+    monkeypatch.setattr(
+        password_file_module,
+        "render_password_text",
+        lambda _entries: f"{username}:{password}:user\n",
+    )
+
+    with pytest.raises(PasswordFileError) as raised:
+        replace_password_file(path, [PasswordEntry("placeholder", "placeholder", "user")])
+
+    error = raised.value
+    inspected = (str(error), repr(error), repr(error.args), repr(vars(error)))
+    assert all(username not in value and password not in value for value in inspected)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert not hasattr(error, "object")
+    assert not path.exists()
+    _assert_exception_graph_has_no_values(
+        BaseExceptionGroup("密码文件编码失败", [error]), (username, password)
+    )
 
 
 def test_render_round_trips_entries_without_exposing_old_content() -> None:
@@ -226,6 +271,34 @@ def test_replace_removes_new_file_when_directory_fsync_fails_without_previous_ta
     assert not list(path.parent.glob(f".{path.name}.*"))
 
 
+def test_new_target_recovery_fsync_failure_reports_absent_but_uncertain_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    real_fsync = os.fsync
+
+    def fail_all_directory_fsyncs(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("directory durability failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_all_directory_fsyncs)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    operation_errors = _operation_errors(raised.value)
+    assert len(operation_errors) == 1
+    recovery = operation_errors[0]
+    assert recovery.target_state == "restored_pending_durability"
+    assert recovery.backup_path is None
+    assert recovery.residual_paths == ()
+    assert recovery.uncertain_paths == (path,)
+    assert recovery.durability_state == "uncertain"
+    assert not os.path.lexists(path)
+    assert not tuple(path.parent.glob(f".{path.name}.*"))
+
+
 def test_replace_keeps_private_backup_when_recovery_replace_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -360,6 +433,326 @@ def _exception_tree(error: BaseException) -> list[BaseException]:
     return result
 
 
+def _assert_exception_graph_has_no_values(error: BaseException, forbidden_values: tuple[str, ...]) -> None:
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        inspected = (str(current), repr(current), repr(current.args), repr(vars(current)))
+        assert all(value not in rendered for value in forbidden_values for rendered in inspected)
+        assert not hasattr(current, "object")
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+
+
+def _operation_errors(error: BaseException) -> list[PasswordFileOperationError]:
+    return [node for node in _exception_tree(error) if isinstance(node, PasswordFileOperationError)]
+
+
+def test_recovery_replace_and_restore_unlink_failures_preserve_both_errors_and_real_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    original = "reader:previous-test-password:user\n"
+    updated = PasswordEntry("reader", "updated-test-password", "user")
+    path.write_text(original, encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_replace = os.replace
+    real_fsync = os.fsync
+    real_unlink = Path.unlink
+    replace_calls = 0
+    directory_fsync_calls = 0
+
+    def fail_recovery_replace(source: object, destination: object) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            real_replace(source, destination)
+            return
+        raise OSError("recovery replace failure marker")
+
+    def fail_update_directory_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise OSError("update fsync failure marker")
+        real_fsync(descriptor)
+
+    def fail_restore_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+        if ".restore." in candidate.name:
+            raise OSError("restore unlink failure marker")
+        real_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", fail_recovery_replace)
+    monkeypatch.setattr(os, "fsync", fail_update_directory_fsync)
+    monkeypatch.setattr(Path, "unlink", fail_restore_unlink)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [updated])
+
+    tree = _exception_tree(raised.value)
+    assert any("recovery replace failure marker" in str(error) for error in tree)
+    operation_errors = _operation_errors(raised.value)
+    assert len(operation_errors) == 1
+    assert operation_errors[0].target_state == "replaced_pending_durability"
+    assert operation_errors[0].residual_paths == tuple(path.parent.glob(f".{path.name}.restore.*"))
+    assert operation_errors[0].uncertain_paths == ()
+    assert parse_password_text(path.read_text(encoding="utf-8")) == [updated]
+    assert operation_errors[0].backup_path in tuple(path.parent.glob(f".{path.name}.backup.*"))
+
+
+def test_recovery_fsync_and_consumed_restore_cleanup_failures_preserve_true_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    original = "reader:previous-test-password:user\n"
+    path.write_text(original, encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_fsync = os.fsync
+    directory_fsync_calls = 0
+
+    def fail_update_recovery_and_cleanup_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls in {2, 3, 4}:
+                raise OSError(f"directory fsync failure marker {directory_fsync_calls}")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_update_recovery_and_cleanup_fsync)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    tree = _exception_tree(raised.value)
+    assert any("directory fsync failure marker 3" in str(error) for error in tree)
+    operation_errors = _operation_errors(raised.value)
+    assert len(operation_errors) == 1
+    assert operation_errors[0].target_state == "restored_pending_durability"
+    assert operation_errors[0].residual_paths == ()
+    assert len(operation_errors[0].uncertain_paths) == 1
+    assert ".restore." in operation_errors[0].uncertain_paths[0].name
+    assert path.read_text(encoding="utf-8") == original
+    assert len(tuple(path.parent.glob(f".{path.name}.backup.*"))) == 1
+    assert not tuple(path.parent.glob(f".{path.name}.restore.*"))
+
+
+def test_recovery_replace_and_restore_cleanup_fsync_failures_preserve_both_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    updated = PasswordEntry("reader", "updated-test-password", "user")
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_replace = os.replace
+    real_fsync = os.fsync
+    replace_calls = 0
+    directory_fsync_calls = 0
+
+    def fail_recovery_replace(source: object, destination: object) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            real_replace(source, destination)
+            return
+        raise OSError("recovery replace failure marker")
+
+    def fail_update_and_restore_cleanup_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls in {2, 3}:
+                raise OSError(f"directory fsync failure marker {directory_fsync_calls}")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "replace", fail_recovery_replace)
+    monkeypatch.setattr(os, "fsync", fail_update_and_restore_cleanup_fsync)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [updated])
+
+    tree = _exception_tree(raised.value)
+    assert any("recovery replace failure marker" in str(error) for error in tree)
+    operation_errors = _operation_errors(raised.value)
+    assert len(operation_errors) == 1
+    cleanup = operation_errors[0]
+    assert cleanup.target_state == "replaced_pending_durability"
+    assert cleanup.residual_paths == ()
+    assert len(cleanup.uncertain_paths) == 1
+    assert ".restore." in cleanup.uncertain_paths[0].name
+    assert parse_password_text(path.read_text(encoding="utf-8")) == [updated]
+    assert cleanup.backup_path is not None and cleanup.backup_path.exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["unlink", "fsync"])
+def test_durable_update_backup_cleanup_is_structured_and_matches_real_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    path = tmp_path / "password.txt"
+    updated = PasswordEntry("reader", "updated-test-password", "user")
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_unlink = Path.unlink
+    real_fsync = os.fsync
+    directory_fsync_calls = 0
+
+    if failure_stage == "unlink":
+
+        def fail_backup_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+            if ".backup." in candidate.name:
+                raise OSError("backup unlink failure marker")
+            real_unlink(candidate, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_backup_unlink)
+    else:
+
+        def fail_backup_cleanup_fsync(descriptor: int) -> None:
+            nonlocal directory_fsync_calls
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_fsync_calls += 1
+                if directory_fsync_calls == 3:
+                    raise OSError("backup fsync failure marker")
+            real_fsync(descriptor)
+
+        monkeypatch.setattr(os, "fsync", fail_backup_cleanup_fsync)
+
+    with pytest.raises(PasswordFileOperationError) as raised:
+        replace_password_file(path, [updated])
+
+    error = raised.value
+    backups = tuple(path.parent.glob(f".{path.name}.backup.*"))
+    assert error.target_state == "persisted"
+    assert error.backup_path is not None
+    assert error.residual_paths == ((error.backup_path,) if failure_stage == "unlink" else ())
+    assert error.uncertain_paths == (() if failure_stage == "unlink" else (error.backup_path,))
+    assert backups == error.residual_paths
+    assert parse_password_text(path.read_text(encoding="utf-8")) == [updated]
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize("failure_stage", ["unlink", "fsync"])
+def test_recovered_update_backup_cleanup_is_structured_and_state_is_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    path = tmp_path / "password.txt"
+    original = "reader:previous-test-password:user\n"
+    path.write_text(original, encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_fsync = os.fsync
+    real_unlink = Path.unlink
+    directory_fsync_calls = 0
+
+    def fail_update_and_backup_cleanup_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls in {2, 4}:
+                raise OSError(f"directory fsync failure marker {directory_fsync_calls}")
+        real_fsync(descriptor)
+
+    if failure_stage == "unlink":
+
+        def fail_backup_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+            if ".backup." in candidate.name:
+                raise OSError("backup unlink failure marker")
+            real_unlink(candidate, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_backup_unlink)
+    monkeypatch.setattr(os, "fsync", fail_update_and_backup_cleanup_fsync)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    operation_errors = _operation_errors(raised.value)
+    assert len(operation_errors) == 1
+    cleanup = operation_errors[0]
+    assert cleanup.target_state == "restored"
+    assert cleanup.backup_path is not None
+    assert cleanup.residual_paths == ((cleanup.backup_path,) if failure_stage == "unlink" else ())
+    assert cleanup.uncertain_paths == (() if failure_stage == "unlink" else (cleanup.backup_path,))
+    assert path.read_text(encoding="utf-8") == original
+    assert cleanup.backup_path.exists() is (failure_stage == "unlink")
+
+
+def test_without_posix_or_nofollow_swap_to_symlink_fails_before_external_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "password.txt"
+    external = tmp_path / "external.txt"
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    external.write_text("external:do-not-read:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    os.chmod(external, 0o600)
+    real_open = os.open
+    real_read_all = password_file_module._read_all
+    swapped = False
+    read_calls = 0
+
+    def swap_before_open(candidate: object, flags: int, *args: object) -> int:
+        nonlocal swapped
+        if Path(candidate) == path and not swapped:
+            swapped = True
+            path.unlink()
+            path.symlink_to(external)
+        return real_open(candidate, flags, *args)
+
+    def count_reads(descriptor: int) -> bytes:
+        nonlocal read_calls
+        read_calls += 1
+        return real_read_all(descriptor)
+
+    monkeypatch.setattr(password_file_module, "_uses_posix_file_security", lambda: False)
+    monkeypatch.setattr(password_file_module, "_supports_o_nofollow", lambda: False)
+    monkeypatch.setattr(os, "open", swap_before_open)
+    monkeypatch.setattr(password_file_module, "_read_all", count_reads)
+
+    with pytest.raises(PasswordFileError):
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    assert read_calls == 0
+    assert external.read_text(encoding="utf-8") == "external:do-not-read:user\n"
+
+
+@pytest.mark.parametrize("main_error", [KeyboardInterrupt("stop"), SystemExit("exit")])
+def test_base_exception_and_cleanup_failure_are_grouped_without_losing_either(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    main_error: BaseException,
+) -> None:
+    path = tmp_path / "password.txt"
+    path.write_text("reader:previous-test-password:user\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    real_unlink = Path.unlink
+
+    monkeypatch.setattr(os, "fsync", lambda _descriptor: (_ for _ in ()).throw(main_error))
+
+    def fail_internal_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+        if candidate.name.startswith(f".{path.name}."):
+            raise OSError("cleanup failure marker")
+        real_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_internal_unlink)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+    tree = _exception_tree(raised.value)
+    assert any(error is main_error for error in tree)
+    assert len(_operation_errors(raised.value)) >= 1
+    _assert_exception_graph_has_no_values(
+        raised.value, ("reader", "previous-test-password", "updated-test-password")
+    )
+
+
 def test_fdopen_construction_failure_closes_owned_descriptor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -416,6 +809,43 @@ def test_cleanup_success_fsyncs_directory_and_failure_is_structured(
     assert len(errors) == 1
     assert errors[0].target_state == "not_replaced"
     assert errors[0].residual_paths == ()
+    assert errors[0].uncertain_paths == (residual,)
+    assert errors[0].durability_state == "uncertain"
+
+
+@pytest.mark.parametrize(
+    ("name", "state"),
+    [
+        (".password.txt.tmp.test", password_file_module._UpdateState.NOT_REPLACED),
+        (
+            ".password.txt.restore.test",
+            password_file_module._UpdateState.RESTORED_PENDING_DURABILITY,
+        ),
+        (".password.txt.backup.test", password_file_module._UpdateState.PERSISTED),
+    ],
+)
+def test_unlinked_internal_file_with_failed_directory_fsync_is_durability_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    state: password_file_module._UpdateState,
+) -> None:
+    internal_path = tmp_path / name
+    internal_path.write_text("safe-test-content", encoding="utf-8")
+    backup_path = internal_path if ".backup." in name else None
+    monkeypatch.setattr(
+        password_file_module,
+        "_fsync_directory",
+        lambda _directory: (_ for _ in ()).throw(OSError("fsync failure")),
+    )
+
+    errors = password_file_module._cleanup_errors(internal_path, state, backup_path)
+
+    assert len(errors) == 1
+    assert not os.path.lexists(internal_path)
+    assert errors[0].residual_paths == ()
+    assert errors[0].uncertain_paths == (internal_path,)
+    assert errors[0].durability_state == "uncertain"
 
 
 def test_non_posix_capability_skips_mode_and_directory_fsync_but_rejects_symlink(

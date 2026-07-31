@@ -2,10 +2,11 @@ import os
 from datetime import UTC
 from pathlib import Path
 
+import policy_analysis.auth.password_file as password_file_module
 import pytest
 from argon2 import PasswordHasher
 from policy_analysis.auth.models import User
-from policy_analysis.auth.service import PasswordSyncError, UserSyncService
+from policy_analysis.auth.service import PasswordFileError, PasswordSyncError, UserSyncService
 from policy_analysis.core.database import build_engine, create_schema, session_factory
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,6 +40,27 @@ def _user(sessions: sessionmaker[Session], username: str) -> User:
         return user
 
 
+def _assert_exception_graph_is_safe(
+    error: BaseException, forbidden_text: tuple[str, ...], forbidden_object: object
+) -> None:
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        inspected = (str(current), repr(current), repr(current.args), repr(vars(current)))
+        assert all(secret not in value for secret in forbidden_text for value in inspected)
+        assert getattr(current, "object", None) is not forbidden_object
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+
+
 def test_sync_adds_new_user_with_real_argon2_hash_and_utc_timestamp(
     tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
 ) -> None:
@@ -55,6 +77,38 @@ def test_sync_adds_new_user_with_real_argon2_hash_and_utc_timestamp(
     assert reader.password_synced_at is not None
     assert reader.password_synced_at.tzinfo is not None
     assert reader.password_synced_at.utcoffset() == UTC.utcoffset(reader.password_synced_at)
+
+
+def test_sync_rejects_invalid_utf8_without_database_write_or_exception_chain(
+    tmp_path: Path, database_sessions: sessionmaker[Session], password_hasher: PasswordHasher
+) -> None:
+    password_file = tmp_path / "password.txt"
+    raw_contents = b"reader:\xff:user\n"
+    password_file.write_bytes(raw_contents)
+    os.chmod(password_file, 0o600)
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+
+    with pytest.raises(PasswordFileError) as error:
+        service.sync_if_changed()
+
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    _assert_exception_graph_is_safe(
+        error.value,
+        ("reader", repr(raw_contents), "\\xff"),
+        raw_contents,
+    )
+    assert service._last_fingerprint is None
+    with pytest.raises(PasswordFileError) as retry_error:
+        service.sync_if_changed()
+    _assert_exception_graph_is_safe(
+        retry_error.value,
+        ("reader", repr(raw_contents), "\\xff"),
+        raw_contents,
+    )
+    assert service._last_fingerprint is None
+    with database_sessions() as session:
+        assert session.scalar(select(User)) is None
 
 
 def test_sync_skips_unchanged_mtime_without_rehashing(
@@ -117,6 +171,50 @@ def test_sync_retries_after_path_is_replaced_between_snapshot_steps(
 
     assert service.sync_if_changed() is True
     assert password_hasher.verify(_user(database_sessions, "reader").password_hash, "changed-test-password")
+
+
+def test_sync_without_posix_or_nofollow_rejects_symlink_swap_before_read(
+    tmp_path: Path,
+    database_sessions: sessionmaker[Session],
+    password_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_file = tmp_path / "password.txt"
+    external = tmp_path / "external.txt"
+    _write_password_file(password_file, "reader:initial-test-password:user\n")
+    _write_password_file(external, "external:do-not-read:user\n")
+    service = UserSyncService(password_file, database_sessions, password_hasher)
+    real_open = os.open
+    real_read = os.read
+    swapped = False
+    read_calls = 0
+
+    def swap_before_open(candidate: object, flags: int, *args: object) -> int:
+        nonlocal swapped
+        if Path(candidate) == password_file and not swapped:
+            swapped = True
+            password_file.unlink()
+            password_file.symlink_to(external)
+        return real_open(candidate, flags, *args)
+
+    def count_reads(descriptor: int, size: int) -> bytes:
+        nonlocal read_calls
+        read_calls += 1
+        return real_read(descriptor, size)
+
+    monkeypatch.setattr(password_file_module, "_uses_posix_file_security", lambda: False)
+    monkeypatch.setattr(password_file_module, "_supports_o_nofollow", lambda: False)
+    monkeypatch.setattr(os, "open", swap_before_open)
+    monkeypatch.setattr(os, "read", count_reads)
+
+    with pytest.raises(PasswordFileError):
+        service.sync_if_changed()
+
+    assert read_calls == 0
+    assert service._last_fingerprint is None
+    assert external.read_text(encoding="utf-8") == "external:do-not-read:user\n"
+    with database_sessions() as session:
+        assert session.scalar(select(User)) is None
 
 
 def test_sync_failure_does_not_record_fingerprint_and_same_version_retries(

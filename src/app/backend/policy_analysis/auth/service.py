@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from policy_analysis.auth.models import User
 from policy_analysis.auth.password_file import (
     PasswordEntry,
+    PasswordFileError,
     _assert_private_regular_stat,
+    _private_read_flags,
     parse_password_text,
 )
 from policy_analysis.auth.repository import UserRepository
@@ -46,7 +48,10 @@ class UserSyncService:
         if self._last_fingerprint == fingerprint:
             return False
 
-        entries = parse_password_text(contents.decode("utf-8"))
+        text = _decode_utf8_or_none(contents)
+        if text is None:
+            raise PasswordFileError("密码文件编码无效")
+        entries = parse_password_text(text)
         if not self._synchronize_transaction(entries):
             raise PasswordSyncError("密码同步数据库操作失败") from None
         self._last_fingerprint = fingerprint
@@ -67,11 +72,13 @@ class UserSyncService:
                 before_status = self._password_file.lstat()
                 _assert_private_regular_stat(before_status)
                 before = _PasswordFileFingerprint.from_stat(before_status)
-                descriptor = os.open(self._password_file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                descriptor = os.open(self._password_file, _private_read_flags())
                 try:
                     opened_status = os.fstat(descriptor)
                     _assert_private_regular_stat(opened_status)
                     opened = _PasswordFileFingerprint.from_stat(opened_status)
+                    if before != opened:
+                        continue
                     chunks: list[bytes] = []
                     while chunk := os.read(descriptor, 64 * 1024):
                         chunks.append(chunk)
@@ -127,6 +134,13 @@ class UserSyncService:
             return self._password_hasher.check_needs_rehash(user.password_hash)
         except (InvalidHashError, VerificationError):
             return True
+
+
+def _decode_utf8_or_none(contents: bytes) -> str | None:
+    try:
+        return contents.decode("utf-8")
+    except UnicodeError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
