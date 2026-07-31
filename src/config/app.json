@@ -1,0 +1,17 @@
+{
+  "server": {
+    "port": 30080
+  },
+  "database": {
+    "path": "src/data/app.sqlite3"
+  },
+  "auth": {
+    "password_file": "src/data/password.txt"
+  },
+  "webfetch": {
+    "base_url": ""
+  },
+  "tasks": {
+    "max_workers": 2
+  }
+}
