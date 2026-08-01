@@ -13,6 +13,8 @@ from policy_analysis.collectors.xinhua import XinhuaCollector
 FIXTURES = Path(__file__).with_name("fixtures")
 INCLUDE = ("中共中央政治局召开会议",)
 BEIJING_OFFSET_SECONDS = 8 * 60 * 60
+CURRENT_ARTICLE_URL = "https://www.news.cn/politics/leaders/20260227/a8b27b1b8c7442be9678ff6e530cdd18/c.html"
+VIDEO_ARTICLE_URL = "https://www.news.cn/20260130/e9daba7d39a040b2b52eb85cc1bf894a/c.html"
 
 
 def _load_fixture(name: str) -> ExtractedArticle:
@@ -81,12 +83,12 @@ def test_accepts_old_and_current_official_articles_and_rejects_video_only_articl
         cutoff,
     )
     current = collector.classify(
-        "https://www.news.cn/politics/leaders/20260227/id/c.html",
+        CURRENT_ARTICLE_URL,
         _load_fixture("xinhua_current_article.json"),
         cutoff,
     )
     video = collector.classify(
-        "https://www.news.cn/20260130/id/c.html",
+        VIDEO_ARTICLE_URL,
         _load_fixture("xinhua_video_article.json"),
         cutoff,
     )
@@ -96,6 +98,7 @@ def test_accepts_old_and_current_official_articles_and_rejects_video_only_articl
     assert old.canonical_url == "https://www.news.cn/2021-10/18/c_1127969449.htm"
     assert old.published_at == datetime(2021, 10, 18, 15, 3, 24, tzinfo=old.published_at.tzinfo)
     assert current.accepted is True
+    assert current.canonical_url == CURRENT_ARTICLE_URL
     assert current.published_at == datetime(2026, 2, 27, 13, 27, 37, tzinfo=current.published_at.tzinfo)
     assert video.accepted is False
     assert video.reason_code == "VIDEO_ONLY"
@@ -201,6 +204,7 @@ def test_link_discovery_handles_relative_absolute_and_dirty_items_without_leakin
         {"href": "javascript:alert(1)", "text": "中共中央政治局召开会议"},
         {"href": "https://www.news.cn/video", "text": "中共中央政治局召开会议 视频"},
         {"href": "https://evil.test/a", "text": "中共中央政治局召开会议"},
+        {"href": "https://www.news.cn:bad/a", "text": "中共中央政治局召开会议 坏端口"},
         {"href": None, "text": "中共中央政治局召开会议"},
         {"href": "https://www.news.cn/no-text", "text": None},
         {"text": "中共中央政治局召开会议"},
@@ -306,14 +310,89 @@ def test_classification_rejection_reasons_are_stable_and_keep_context(
     assert result.artifact_id == article.artifact_id
 
 
-def test_reason_priority_uses_first_failure_in_the_documented_order() -> None:
-    result = _collector().classify(
-        "https://outside.test/no-date",
-        _article(title="无关标题 视频", content="编导：测试 新华社音视频部制作", published_hint=""),
-        datetime(2027, 1, 1, tzinfo=UTC),
-    )
-
-    assert result.reason_code == "DOMAIN_NOT_ALLOWED"
+@pytest.mark.parametrize(
+    ("expected_reason", "url", "article", "cutoff"),
+    [
+        pytest.param(
+            "DOMAIN_NOT_ALLOWED",
+            "https://outside.test/20260730/a.html",
+            _article(title="无关标题"),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="domain-before-title",
+        ),
+        pytest.param(
+            "TITLE_NOT_MATCHED",
+            "https://www.news.cn/20260730/a.html",
+            _article(title="无关标题 视频"),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="title-before-excluded",
+        ),
+        pytest.param(
+            "EXCLUDED_KEYWORD",
+            "https://www.news.cn/20260730/a.html",
+            _article(
+                title="中共中央政治局召开会议 视频",
+                content="新华社北京电 中共中央政治局召开会议。编导：测试人员 新华社音视频部制作",
+            ),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="excluded-before-video",
+        ),
+        pytest.param(
+            "VIDEO_ONLY",
+            "https://www.news.cn/20260730/a.html",
+            _article(content="编导：测试人员 新华社音视频部制作"),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="video-before-lead",
+        ),
+        pytest.param(
+            "LEAD_NOT_MATCHED",
+            "https://www.news.cn/20260730/a.html",
+            _article(content="无关内容。" * 30, author=""),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="lead-before-source",
+        ),
+        pytest.param(
+            "SOURCE_NOT_OFFICIAL",
+            "https://www.news.cn/politics/a.html",
+            _article(
+                content="中共中央政治局召开会议。" + ("会议内容。" * 20),
+                author="",
+                published_hint="",
+            ),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="source-before-published-missing",
+        ),
+        pytest.param(
+            "PUBLISHED_AT_MISSING",
+            "https://www.news.cn/politics/a.html",
+            _article(
+                content="中共中央政治局召开会议。",
+                author="新华网",
+                published_hint="",
+            ),
+            datetime(2020, 1, 1, tzinfo=UTC),
+            id="published-missing-before-content-short",
+        ),
+        pytest.param(
+            "OUTSIDE_WINDOW",
+            "https://www.news.cn/20200730/a.html",
+            _article(
+                content="中共中央政治局召开会议。",
+                author="新华网",
+                published_hint="2020-07-30T14:00:00+08:00",
+            ),
+            datetime(2021, 1, 1, tzinfo=UTC),
+            id="outside-window-before-content-short",
+        ),
+    ],
+)
+def test_classification_uses_documented_reason_priority_when_adjacent_conditions_both_fail(
+    expected_reason: str,
+    url: str,
+    article: ExtractedArticle,
+    cutoff: datetime,
+) -> None:
+    assert _collector().classify(url, article, cutoff).reason_code == expected_reason
 
 
 @pytest.mark.parametrize(
@@ -368,6 +447,26 @@ def test_published_time_uses_hint_then_full_body_date_then_url(
     assert result.published_at.tzinfo is not None
     assert result.published_at.utcoffset().total_seconds() == BEIJING_OFFSET_SECONDS
     assert result.published_at.replace(tzinfo=None) == expected
+
+
+def test_body_date_selection_uses_earliest_valid_text_match_across_supported_formats() -> None:
+    article = _article(
+        published_hint="",
+        content=(
+            "2020年1月1日 新华社北京电 中共中央政治局召开会议。"
+            "这是达到正文长度要求的会议文字通报测试内容。"
+            "后文引用另一时间 2026-07-30T01:02:03Z，但不得覆盖开头日期。"
+        ),
+    )
+
+    result = _collector().classify(
+        "https://www.news.cn/politics/a.html",
+        article,
+        datetime(2021, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.reason_code == "OUTSIDE_WINDOW"
+    assert result.published_at == datetime(2020, 1, 1, tzinfo=result.published_at.tzinfo)
 
 
 def test_cutoff_is_inclusive_and_naive_values_are_interpreted_as_beijing_time() -> None:

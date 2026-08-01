@@ -313,17 +313,21 @@ def _first_datetime(value: str) -> datetime | None:
     if exact is not None:
         return _as_beijing(exact)
 
+    candidates: list[tuple[int, int, datetime]] = []
     for match in _ISO_TIMESTAMP.finditer(stripped):
         embedded = _parse_iso_datetime(match.group())
         if embedded is not None:
-            return _as_beijing(embedded)
+            candidates.append((match.start(), 0, _as_beijing(embedded)))
 
-    for pattern in (_DASHED_DATE, _CHINESE_DATE):
+    for priority, pattern in enumerate((_DASHED_DATE, _CHINESE_DATE), start=1):
         for match in pattern.finditer(stripped):
             parsed = _datetime_from_groups(match.groups())
             if parsed is not None:
-                return parsed
-    return None
+                candidates.append((match.start(), priority, parsed))
+
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate[:2])[2]
 
 
 def _datetime_from_groups(groups: tuple[str | None, ...]) -> datetime | None:
