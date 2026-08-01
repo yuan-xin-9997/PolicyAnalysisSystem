@@ -1,2 +1,105 @@
 # PolicyAnalysisSystem
-政策分析系统
+
+PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策采集与分析系统。当前平台阶段已完成登录、服务端会话、页面权限导航、权限管理只读列表、脱敏后的系统配置展示，以及任务中心、政策库、推送和分析页面的占位入口。政策采集、任务执行、政策检索和完整的用户管理交互将在后续阶段实现。
+
+## 本地开发
+
+### 前置条件
+
+- Python 3.12
+- Node.js `^20.19.0 || >=22.12.0`
+- npm（随 Node.js 安装）
+
+在仓库根目录创建后端虚拟环境并安装开发依赖：
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+安装前端锁定依赖：
+
+```bash
+npm --prefix src/app/frontend ci
+```
+
+### 配置
+
+[`src/config/app.json`](src/config/app.json) 只保存无密钥配置。配置优先级从高到低为：
+
+1. `POLICY_ANALYSIS_` 前缀的环境变量；
+2. `src/config/app.json`；
+3. 代码中的非环境默认值。
+
+嵌套配置使用双下划线分隔。例如，以下命令只展示虚构占位符，运行时应替换为本机密钥，并且不得把真实值提交到版本库：
+
+```bash
+export POLICY_ANALYSIS_AUTH__SESSION_SECRET='replace-with-a-long-random-session-secret'
+export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
+```
+
+数据库文件和密码文件默认使用项目内相对路径。服务器端口在 `src/config/app.json` 中配置为 `30080`。
+
+### 首次准备登录账号
+
+首次本地运行前创建 `src/data/password.txt`，每行格式为：
+
+```text
+username:password:role
+```
+
+`role` 只能是 `admin` 或 `user`。首次部署允许使用项目约定的默认管理员：
+
+```text
+# 仅用于首次部署；首次登录后必须立即修改密码
+admin:admin123:admin
+```
+
+先创建 `src/data` 目录，并确保 `password.txt` 只允许当前用户读写。在 Linux 或 macOS 上可以执行：
+
+```bash
+mkdir -p src/data
+touch src/data/password.txt
+chmod 600 src/data/password.txt
+```
+
+把上面的默认内容写入新文件后即可首次登录。不要把生产账号、生产密码或任何服务密钥写入 README、配置文件或提交记录。
+
+### 启动与访问
+
+先构建前端，再从仓库根目录启动后端；FastAPI 会提供已构建的单页应用：
+
+```bash
+npm --prefix src/app/frontend run build
+.venv/bin/uvicorn policy_analysis.main:app --app-dir src/app/backend --host 127.0.0.1 --port 30080
+```
+
+本地访问地址：
+
+- 系统页面：<http://127.0.0.1:30080/>
+- 存活检查：<http://127.0.0.1:30080/health/live>
+- 就绪检查：<http://127.0.0.1:30080/health/ready>
+
+根目录启停脚本、systemd 和 Jenkins 部署能力尚未在当前平台阶段交付，不能用这些入口替代上述开发命令。
+
+## 平台阶段验证
+
+从仓库根目录运行后端测试、静态检查和格式检查：
+
+```bash
+.venv/bin/pytest src/tests/backend/test_platform_smoke.py -v
+.venv/bin/ruff check src/app/backend src/tests/backend
+.venv/bin/ruff format --check src/app/backend src/tests/backend
+.venv/bin/pytest --cov=policy_analysis --cov-report=term-missing --cov-fail-under=80 src/tests/backend -q
+```
+
+运行前端类型检查、静态检查、单元测试和生产构建：
+
+```bash
+npm --prefix src/app/frontend run type-check
+npm --prefix src/app/frontend run lint
+npm --prefix src/app/frontend run test -- --run
+npm --prefix src/app/frontend run build
+```
+
+浏览器端到端测试尚未实现；当前 `test:e2e` 脚本会明确返回非零状态，因此不属于本阶段的通过项。
