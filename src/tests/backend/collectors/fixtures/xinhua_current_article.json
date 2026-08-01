@@ -1,0 +1,15 @@
+{
+  "request_id": "test-xinhua-current-request",
+  "adapter": "generic.article",
+  "adapter_version": "1",
+  "artifact_id": "test-xinhua-current-artifact",
+  "data": {
+    "title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+    "content": "2026年2月27日 13:27:37 来源：新华网 新华社北京2月27日电 中共中央政治局2月27日召开会议。会议分析研究有关工作并审议相关意见。这是用于覆盖当前页面结构的简短契约测试片段。",
+    "author": "新华网",
+    "date": "2026-02-27T13:27:37+08:00",
+    "future_data_field": {
+      "safe": true
+    }
+  }
+}

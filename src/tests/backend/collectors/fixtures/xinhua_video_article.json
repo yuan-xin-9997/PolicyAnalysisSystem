@@ -1,0 +1,12 @@
+{
+  "request_id": "test-xinhua-video-request",
+  "adapter": "generic.article",
+  "adapter_version": "1",
+  "artifact_id": "test-xinhua-video-artifact",
+  "data": {
+    "title": "新华社消息丨中共中央政治局召开会议 中共中央总书记习近平主持会议",
+    "content": "编导：测试人员 新华社音视频部制作",
+    "author": "新华社",
+    "date": "2026-01-30 15:11:58"
+  }
+}
