@@ -100,3 +100,19 @@ def test_login_active_key_capacity_has_safe_default_and_bounds(tmp_path: Path) -
         )
         with pytest.raises(ValidationError):
             load_settings(config_path=config, project_root=tmp_path, environ={})
+
+
+def test_build_metadata_environment_does_not_pollute_application_settings_sources(tmp_path: Path) -> None:
+    config = tmp_path / "app.json"
+    config.write_text("{}", encoding="utf-8")
+    environment = {
+        "POLICY_ANALYSIS_VERSION": "v0.123",
+        "POLICY_ANALYSIS_COMMIT_SHA": "abcdef1",
+    }
+
+    settings = load_settings(config_path=config, project_root=tmp_path, environ=environment)
+    sources = settings_sources(config, environment)
+
+    assert settings.server.port == 30080
+    assert "version" not in sources
+    assert "commit_sha" not in sources

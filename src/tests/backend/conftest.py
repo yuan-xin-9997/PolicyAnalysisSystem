@@ -140,22 +140,39 @@ def client(
 
 
 @pytest.fixture
-def admin_client(client: TestClient, password_file: Path) -> TestClient:
+def admin_client(
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    password_file: Path,
+) -> Iterator[TestClient]:
     password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"username": "admin", "password": "admin123"},
-    )
-    assert response.status_code == 200
-    return client
+    with client_context(auth_app) as authenticated_client:
+        response = authenticated_client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert response.status_code == 200
+        authenticated_client.csrf_headers = {  # type: ignore[attr-defined]
+            "X-CSRF-Token": response.json()["csrf_token"]
+        }
+        yield authenticated_client
 
 
 @pytest.fixture
-def user_client(client: TestClient, password_file: Path) -> TestClient:
-    password_file.write_text("reader:reader123:user\n", encoding="utf-8")
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"username": "reader", "password": "reader123"},
-    )
-    assert response.status_code == 200
-    return client
+def user_client(
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    password_file: Path,
+) -> Iterator[TestClient]:
+    existing = password_file.read_text(encoding="utf-8")
+    password_file.write_text(f"{existing}reader:reader123:user\n", encoding="utf-8")
+    with client_context(auth_app) as authenticated_client:
+        response = authenticated_client.post(
+            "/api/v1/auth/login",
+            json={"username": "reader", "password": "reader123"},
+        )
+        assert response.status_code == 200
+        authenticated_client.csrf_headers = {  # type: ignore[attr-defined]
+            "X-CSRF-Token": response.json()["csrf_token"]
+        }
+        yield authenticated_client

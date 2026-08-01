@@ -1,10 +1,13 @@
 import warnings
+from pathlib import Path
 from types import SimpleNamespace
 
 import policy_analysis.main as main_module
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from policy_analysis.auth.service import AuthService
+from policy_analysis.core.settings import AppSettings
 from policy_analysis.main import create_app
 
 
@@ -83,6 +86,28 @@ def test_injected_service_remains_caller_owned_across_lifespans(monkeypatch) -> 
     with _test_client(app):
         assert app.state.auth_service is injected_service
     assert app.state.auth_service is injected_service
+
+
+def test_default_service_builder_constructs_complete_runtime_with_temporary_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = AppSettings.model_validate(
+        {
+            "database": {"path": tmp_path / "app.sqlite3"},
+            "auth": {"password_file": tmp_path / "password.txt"},
+        }
+    )
+    monkeypatch.setattr(main_module, "load_settings", lambda *_args: settings)
+
+    service, engine = main_module._build_default_auth_service()
+
+    try:
+        assert isinstance(service, AuthService)
+        assert service.sessions.kw["bind"] is engine
+        assert service.user_sync._password_file == tmp_path / "password.txt"
+    finally:
+        engine.dispose()
 
 
 def _test_client(app: FastAPI) -> TestClient:

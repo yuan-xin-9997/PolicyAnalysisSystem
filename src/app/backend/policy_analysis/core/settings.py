@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from policy_analysis.core.paths import resolve_project_path
 
+_BUILD_METADATA_NAMES = {"POLICY_ANALYSIS_VERSION", "POLICY_ANALYSIS_COMMIT_SHA"}
+
 
 class StrictSettingsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -74,7 +76,7 @@ def load_settings(
 ) -> AppSettings:
     data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
     for name, raw_value in environ.items():
-        if not name.startswith("POLICY_ANALYSIS_"):
+        if not name.startswith("POLICY_ANALYSIS_") or name in _BUILD_METADATA_NAMES:
             continue
         keys = [part.lower() for part in name.removeprefix("POLICY_ANALYSIS_").split("__")]
         _set_nested(data, keys, _parse_environment_value(raw_value))
@@ -123,7 +125,7 @@ def settings_sources(config_path: Path, environ: Mapping[str, str]) -> dict[str,
     sources = {path: "default" for path in flatten(defaults)}
     sources.update({path: "config_file" for path in flatten(configured)})
     for name in environ:
-        if name.startswith("POLICY_ANALYSIS_"):
+        if name.startswith("POLICY_ANALYSIS_") and name not in _BUILD_METADATA_NAMES:
             path = name.removeprefix("POLICY_ANALYSIS_").lower().replace("__", ".")
             sources[path] = "environment"
     return sources

@@ -200,8 +200,7 @@ def test_alembic_upgrade_uses_environment_overridden_temporary_database(tmp_path
     assert {tuple(item["column_names"]) for item in inspector.get_unique_constraints("users")} >= {
         ("username",),
     }
-    assert {
-        tuple(item["column_names"])
-        for item in inspector.get_unique_constraints("page_permissions")
-    } >= {("user_id", "page_code")}
+    assert {tuple(item["column_names"]) for item in inspector.get_unique_constraints("page_permissions")} >= {
+        ("user_id", "page_code")
+    }
     assert inspector.get_foreign_keys("sessions")[0]["options"]["ondelete"] == "CASCADE"

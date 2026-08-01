@@ -26,9 +26,13 @@ from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.password_file import (
     PasswordEntry,
     PasswordFileError,
+    PasswordFileLock,
+    PasswordFileOperationError,
     _assert_private_regular_stat,
     _private_read_flags,
     parse_password_text,
+    replace_password_file,
+    replace_password_file_contents,
 )
 from policy_analysis.auth.repository import UserRepository
 from policy_analysis.core.database import session_scope
@@ -47,16 +51,18 @@ class UserSyncService:
         password_file: Path,
         sessions: sessionmaker[Session],
         password_hasher: PasswordHasher,
+        file_lock: PasswordFileLock | None = None,
     ) -> None:
         self._password_file = password_file
         self._sessions = sessions
         self._password_hasher = password_hasher
         self._last_fingerprint: _PasswordFileFingerprint | None = None
-        self._sync_lock = Lock()
+        self.file_lock = file_lock or PasswordFileLock(password_file)
+        self._last_usernames: set[str] | None = None
 
     def sync_if_changed(self) -> bool:
         """Synchronize after a new file mtime; return whether database work was performed."""
-        with self._sync_lock:
+        with self.file_lock:
             return self._sync_if_changed_locked()
 
     def _sync_if_changed_locked(self) -> bool:
@@ -74,6 +80,7 @@ class UserSyncService:
         if not self._synchronize_transaction(entries):
             raise PasswordSyncError("密码同步数据库操作失败") from None
         self._last_fingerprint = fingerprint
+        self._last_usernames = {entry.username for entry in entries}
         return True
 
     def _synchronize_transaction(self, entries: list[PasswordEntry]) -> bool:
@@ -133,7 +140,11 @@ class UserSyncService:
 
             password_changed = self._password_needs_rehash(user, entry.password)
             role_changed = user.role != entry.role
-            reactivated = not user.is_active
+            reactivated = (
+                not user.is_active
+                and self._last_usernames is not None
+                and entry.username not in self._last_usernames
+            )
             if password_changed:
                 user.password_hash = self._password_hasher.hash(entry.password)
             if role_changed:
@@ -146,6 +157,12 @@ class UserSyncService:
         for user in repository.list_users():
             if user.username not in entries_by_username:
                 user.is_active = False
+
+    def record_managed_snapshot(self, entries: list[PasswordEntry]) -> None:
+        """Record a file version already committed by the administration service."""
+        _contents, fingerprint = self._read_stable_snapshot()
+        self._last_fingerprint = fingerprint
+        self._last_usernames = {entry.username for entry in entries}
 
     def _password_needs_rehash(self, user: User, supplied_password: str) -> bool:
         try:
@@ -305,6 +322,18 @@ class AuthService:
             monotonic=monotonic,
         )
 
+    @property
+    def sessions(self) -> sessionmaker[Session]:
+        return self._sessions
+
+    @property
+    def user_sync(self) -> UserSyncService:
+        return self._user_sync
+
+    @property
+    def password_hasher(self) -> PasswordHasher:
+        return self._password_hasher
+
     def login(self, username: str, password: str, client_address: str) -> LoginResult:
         self._sync_users()
         normalized_username = username.strip()
@@ -404,12 +433,286 @@ class AuthService:
 
 
 def _public_user(user: User) -> PublicUser:
+    from policy_analysis.auth.permissions import all_page_codes
+
     return PublicUser(
         id=user.id,
         username=user.username,
         role=user.role,
-        page_permissions=tuple(sorted(permission.page_code for permission in user.page_permissions)),
+        page_permissions=(
+            all_page_codes()
+            if user.role == "admin"
+            else tuple(sorted(permission.page_code for permission in user.page_permissions))
+        ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedUser:
+    id: int
+    username: str
+    role: str
+    is_active: bool
+    pages: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "is_active": self.is_active,
+            "pages": list(self.pages),
+        }
+
+
+class UserAdministrationError(RuntimeError):
+    """Safe domain failure for a compensated user administration operation."""
+
+
+class UserAdministrationService:
+    """Keep password.txt authoritative while applying matching database changes."""
+
+    def __init__(
+        self,
+        *,
+        user_sync: UserSyncService,
+        sessions: sessionmaker[Session],
+        password_hasher: PasswordHasher,
+    ) -> None:
+        self._user_sync = user_sync
+        self._password_file = user_sync._password_file
+        self._sessions = sessions
+        self._password_hasher = password_hasher
+
+    def list_users(self) -> list[ManagedUser]:
+        with self._user_sync.file_lock:
+            self._user_sync._sync_if_changed_locked()
+            with self._sessions() as database:
+                users = database.scalars(
+                    select(User).options(joinedload(User.page_permissions)).order_by(User.username)
+                ).unique()
+                return [_managed_user(user) for user in users]
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        role: str,
+        pages: set[str],
+    ) -> ManagedUser:
+        def mutate(entries: list[PasswordEntry], database: Session) -> tuple[list[PasswordEntry], User]:
+            if any(entry.username == username for entry in entries):
+                raise APIError(status_code=409, code="USER_EXISTS", message="用户名已存在。")
+            user = User(
+                username=username,
+                password_hash=self._password_hasher.hash(password),
+                role=role,
+                is_active=True,
+                password_synced_at=datetime.now(UTC),
+            )
+            database.add(user)
+            database.flush()
+            _replace_permissions(user, pages)
+            return [*entries, PasswordEntry(username, password, role)], user
+
+        return self._update(mutate)
+
+    def change_password(self, username: str, password: str) -> ManagedUser:
+        def mutate(entries: list[PasswordEntry], database: Session) -> tuple[list[PasswordEntry], User]:
+            user = _find_user(database, username)
+            found = any(entry.username == username for entry in entries)
+            updated = [
+                PasswordEntry(entry.username, password, entry.role) if entry.username == username else entry
+                for entry in entries
+            ]
+            if not found:
+                raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
+            user.password_hash = self._password_hasher.hash(password)
+            user.password_synced_at = datetime.now(UTC)
+            return updated, user
+
+        return self._update(mutate)
+
+    def change_role(self, username: str, role: str) -> ManagedUser:
+        def mutate(entries: list[PasswordEntry], database: Session) -> tuple[list[PasswordEntry], User]:
+            user = _find_user(database, username)
+            found = any(entry.username == username for entry in entries)
+            updated = [
+                PasswordEntry(entry.username, entry.password, role) if entry.username == username else entry
+                for entry in entries
+            ]
+            if not found:
+                raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
+            user.role = role
+            user.password_synced_at = datetime.now(UTC)
+            return updated, user
+
+        return self._update(mutate)
+
+    def set_active(self, username: str, is_active: bool) -> ManagedUser:
+        with self._user_sync.file_lock:
+            self._user_sync._sync_if_changed_locked()
+            operation_failed = False
+            try:
+                with session_scope(self._sessions) as database:
+                    user = _find_user(database, username)
+                    if is_active:
+                        _contents, entries = self._read_entries_locked()
+                        if not any(entry.username == username for entry in entries):
+                            raise APIError(
+                                status_code=404,
+                                code="USER_NOT_FOUND",
+                                message="用户不存在。",
+                            )
+                    user.is_active = is_active
+                    database.flush()
+                    result = _managed_user(user)
+            except APIError:
+                raise
+            except Exception:
+                operation_failed = True
+            if operation_failed:
+                raise UserAdministrationError("用户状态更新失败") from None
+            return result
+
+    def set_pages(self, username: str, pages: set[str]) -> ManagedUser:
+        with self._user_sync.file_lock:
+            self._user_sync._sync_if_changed_locked()
+            operation_failed = False
+            try:
+                with session_scope(self._sessions) as database:
+                    user = _find_user(database, username)
+                    _replace_permissions(user, pages)
+                    database.flush()
+                    result = _managed_user(user)
+            except APIError:
+                raise
+            except Exception:
+                operation_failed = True
+            if operation_failed:
+                raise UserAdministrationError("页面授权更新失败") from None
+            return result
+
+    def _update(
+        self,
+        mutate: Callable[[list[PasswordEntry], Session], tuple[list[PasswordEntry], User]],
+    ) -> ManagedUser:
+        with self._user_sync.file_lock:
+            self._user_sync._sync_if_changed_locked()
+            original_contents, original_entries = self._read_entries_locked()
+            database = self._sessions()
+            file_replaced = False
+            operation_failed = False
+            try:
+                updated_entries, user = mutate(original_entries, database)
+                database.flush()
+                replace_password_file(self._password_file, updated_entries)
+                file_replaced = True
+                database.commit()
+                result = _managed_user(user)
+                self._user_sync.record_managed_snapshot(updated_entries)
+                return result
+            except APIError:
+                database.rollback()
+                raise
+            except BaseException as error:
+                database.rollback()
+                final_entries = updated_entries if "updated_entries" in locals() else original_entries
+                if file_replaced or _file_contains_attempted_update(error):
+                    final_entries = self._compensate(
+                        original_contents,
+                        original_entries,
+                        final_entries,
+                    )
+                self._synchronize_final_file()
+                operation_failed = True
+            finally:
+                database.close()
+            if operation_failed:
+                raise UserAdministrationError("用户管理操作失败") from None
+            raise AssertionError("用户管理操作未返回结果")
+
+    def _read_entries_locked(self) -> tuple[bytes, list[PasswordEntry]]:
+        contents, _fingerprint = self._user_sync._read_stable_snapshot()
+        text = _decode_utf8_or_none(contents)
+        if text is None:
+            raise UserAdministrationError("用户管理操作失败")
+        try:
+            return contents, parse_password_text(text)
+        except ValueError:
+            raise UserAdministrationError("用户管理操作失败") from None
+
+    def _compensate(
+        self,
+        original_contents: bytes,
+        original_entries: list[PasswordEntry],
+        attempted_entries: list[PasswordEntry],
+    ) -> list[PasswordEntry]:
+        try:
+            replace_password_file_contents(self._password_file, original_contents)
+            self._user_sync.record_managed_snapshot(original_entries)
+            return original_entries
+        except BaseException as compensation_error:
+            if _file_contains_attempted_update(compensation_error):
+                return original_entries
+            if _file_restored_previous(compensation_error):
+                return attempted_entries
+            return attempted_entries
+
+    def _synchronize_final_file(self) -> None:
+        self._user_sync._last_fingerprint = None
+        try:
+            self._user_sync._sync_if_changed_locked()
+        except Exception:
+            return
+
+
+def _find_user(database: Session, username: str) -> User:
+    user = database.scalar(
+        select(User).options(joinedload(User.page_permissions)).where(User.username == username)
+    )
+    if user is None:
+        raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
+    return user
+
+
+def _replace_permissions(user: User, pages: set[str]) -> None:
+    from policy_analysis.auth.models import PagePermission
+
+    user.page_permissions[:] = [PagePermission(page_code=page) for page in sorted(pages)]
+
+
+def _managed_user(user: User) -> ManagedUser:
+    from policy_analysis.auth.permissions import all_page_codes
+
+    pages = (
+        all_page_codes()
+        if user.role == "admin"
+        else tuple(sorted(permission.page_code for permission in user.page_permissions))
+    )
+    return ManagedUser(user.id, user.username, user.role, user.is_active, pages)
+
+
+def _operation_states(error: BaseException) -> set[str]:
+    states: set[str] = set()
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, PasswordFileOperationError):
+            states.add(current.target_state)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+    return states
+
+
+def _file_contains_attempted_update(error: BaseException) -> bool:
+    states = _operation_states(error)
+    return bool(states & {"persisted", "replaced_pending_durability"})
+
+
+def _file_restored_previous(error: BaseException) -> bool:
+    states = _operation_states(error)
+    return bool(states & {"restored", "restored_pending_durability", "not_replaced"})
 
 
 def _hash_token(token: str) -> str:

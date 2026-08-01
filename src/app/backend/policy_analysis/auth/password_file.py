@@ -6,9 +6,11 @@ import os
 import stat
 import tempfile
 import unicodedata
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from threading import RLock
 from typing import Literal
 
 Role = Literal["admin", "user"]
@@ -92,6 +94,66 @@ class PasswordEntry:
     role: Role
 
 
+class PasswordFileLock(AbstractContextManager[None]):
+    """A shared in-process and advisory lock for one credential source file."""
+
+    def __init__(self, password_file: Path) -> None:
+        self._path = password_file.with_name(f".{password_file.name}.lock")
+        self._thread_lock = RLock()
+        self._descriptor: int | None = None
+
+    def __enter__(self) -> None:
+        self._thread_lock.acquire()
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            expected = _assert_private_regular(self._path) if os.path.lexists(self._path) else None
+            flags = os.O_RDWR
+            if _supports_o_nofollow():
+                flags |= os.O_NOFOLLOW
+            created = expected is None
+            try:
+                descriptor = os.open(
+                    self._path,
+                    flags | (os.O_CREAT | os.O_EXCL if created else 0),
+                    0o600,
+                )
+            except FileExistsError:
+                expected = _assert_private_regular(self._path)
+                created = False
+                descriptor = os.open(self._path, flags)
+            try:
+                if created:
+                    _set_private_mode(descriptor)
+                opened_status = os.fstat(descriptor)
+                _assert_private_regular_stat(opened_status)
+                opened = _PrivateFileFingerprint.from_stat(opened_status)
+                current = _assert_private_regular(self._path)
+                if (expected is not None and expected != opened) or opened != current:
+                    raise PasswordFileError("凭据文件锁不可用")
+                _lock_descriptor(descriptor)
+                locked = _PrivateFileFingerprint.from_stat(os.fstat(descriptor))
+                if locked != opened or _assert_private_regular(self._path) != locked:
+                    raise PasswordFileError("凭据文件锁不可用")
+            except BaseException:
+                os.close(descriptor)
+                raise
+            self._descriptor = descriptor
+        except BaseException:
+            self._thread_lock.release()
+            raise
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        del exc_type, exc_value, traceback
+        descriptor = self._descriptor
+        self._descriptor = None
+        try:
+            if descriptor is not None:
+                _unlock_descriptor(descriptor)
+                os.close(descriptor)
+        finally:
+            self._thread_lock.release()
+
+
 def parse_password_text(text: str) -> list[PasswordEntry]:
     entries: list[PasswordEntry] = []
     usernames: set[str] = set()
@@ -126,6 +188,11 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
     rendered = _encode_utf8_or_none(rendered_text)
     if rendered is None:
         raise PasswordFileError("密码文件编码无效")
+    replace_password_file_contents(path, rendered)
+
+
+def replace_password_file_contents(path: Path, contents: bytes) -> None:
+    """Safely replace a credential file with previously validated original bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_path: Path | None = None
     temporary_path: Path | None = None
@@ -137,7 +204,7 @@ def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
             _assert_private_regular(path)
             backup_path = _write_private_copy(path.parent, f".{path.name}.backup.", _read_private_file(path))
             _fsync_directory(path.parent)
-        temporary_path = _write_private_copy(path.parent, f".{path.name}.tmp.", rendered)
+        temporary_path = _write_private_copy(path.parent, f".{path.name}.tmp.", contents)
         os.replace(temporary_path, path)
         temporary_path = None
         state = _UpdateState.REPLACED_PENDING_DURABILITY
@@ -386,6 +453,20 @@ def _private_read_flags() -> int:
 def _set_private_mode(descriptor: int) -> None:
     if _uses_posix_file_security():
         os.fchmod(descriptor, 0o600)
+
+
+def _lock_descriptor(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+
+def _unlock_descriptor(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 def _validate_entry(entry: PasswordEntry, usernames: set[str], position: str) -> None:

@@ -8,6 +8,7 @@ import pytest
 from policy_analysis.auth.password_file import (
     PasswordEntry,
     PasswordFileError,
+    PasswordFileLock,
     PasswordFileOperationError,
     parse_password_text,
     render_password_text,
@@ -1253,3 +1254,21 @@ def test_non_posix_capability_skips_mode_and_directory_fsync_but_rejects_symlink
     path.symlink_to(target)
     with pytest.raises(PasswordFileError):
         replace_password_file(path, [PasswordEntry("reader", "updated-test-password", "user")])
+
+
+def test_shared_password_file_lock_rejects_symlink_without_nofollow_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_file = tmp_path / "password.txt"
+    lock_path = tmp_path / ".password.txt.lock"
+    external = tmp_path / "external.lock"
+    external.write_text("external", encoding="utf-8")
+    lock_path.symlink_to(external)
+    monkeypatch.setattr(password_file_module, "_uses_posix_file_security", lambda: False)
+    monkeypatch.setattr(password_file_module, "_supports_o_nofollow", lambda: False)
+
+    with pytest.raises(PasswordFileError), PasswordFileLock(password_file):
+        pytest.fail("symlink lock must never be acquired")
+
+    assert external.read_text(encoding="utf-8") == "external"

@@ -1,4 +1,6 @@
-"""Authentication API routes."""
+"""Authentication and user-administration API routes."""
+
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
@@ -8,9 +10,20 @@ from policy_analysis.auth.dependencies import (
     require_csrf_session,
     require_user,
 )
-from policy_analysis.auth.service import AuthenticatedSession, AuthService, PublicUser
+from policy_analysis.auth.password_file import PasswordFileError
+from policy_analysis.auth.permissions import PageCode, require_admin_csrf
+from policy_analysis.auth.service import (
+    AuthenticatedSession,
+    AuthService,
+    PasswordSyncError,
+    PublicUser,
+    UserAdministrationError,
+    UserAdministrationService,
+)
+from policy_analysis.core.errors import APIError
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+users_router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 
 class LoginRequest(BaseModel):
@@ -57,3 +70,108 @@ def logout(
         httponly=True,
         samesite="lax",
     )
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=200)
+    role: Literal["admin", "user"]
+    pages: set[PageCode] = Field(default_factory=set)
+
+
+class ChangePasswordRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=200)
+
+
+class ChangeRoleRequest(BaseModel):
+    role: Literal["admin", "user"]
+
+
+class ChangeStatusRequest(BaseModel):
+    is_active: bool
+
+
+class ChangePagesRequest(BaseModel):
+    pages: set[PageCode]
+
+
+def get_user_administration_service(request: Request) -> UserAdministrationService:
+    return request.app.state.user_administration_service
+
+
+@users_router.get("")
+def list_users(
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return {"items": [user.to_dict() for user in _admin_call(service.list_users)]}
+
+
+@users_router.post("", status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: CreateUserRequest,
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return _admin_call(
+        service.create_user,
+        payload.username,
+        payload.password,
+        payload.role,
+        {page.value for page in payload.pages},
+    ).to_dict()
+
+
+@users_router.patch("/{username}/password")
+def change_password(
+    username: str,
+    payload: ChangePasswordRequest,
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return _admin_call(service.change_password, username, payload.password).to_dict()
+
+
+@users_router.patch("/{username}/role")
+def change_role(
+    username: str,
+    payload: ChangeRoleRequest,
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return _admin_call(service.change_role, username, payload.role).to_dict()
+
+
+@users_router.patch("/{username}/status")
+def change_status(
+    username: str,
+    payload: ChangeStatusRequest,
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return _admin_call(service.set_active, username, payload.is_active).to_dict()
+
+
+@users_router.patch("/{username}/pages")
+def change_pages(
+    username: str,
+    payload: ChangePagesRequest,
+    _admin: PublicUser = Depends(require_admin_csrf),
+    service: UserAdministrationService = Depends(get_user_administration_service),
+) -> dict[str, object]:
+    return _admin_call(
+        service.set_pages,
+        username,
+        {page.value for page in payload.pages},
+    ).to_dict()
+
+
+def _admin_call(operation, *args):
+    try:
+        return operation(*args)
+    except (PasswordFileError, PasswordSyncError, UserAdministrationError):
+        raise APIError(
+            status_code=503,
+            code="USER_ADMINISTRATION_FAILED",
+            message="用户管理服务暂时不可用。",
+        ) from None
