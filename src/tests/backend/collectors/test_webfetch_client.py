@@ -353,6 +353,19 @@ def test_fetch_invalid_contract_maps_stable_error(field: str, value: object) -> 
     assert caught.value.code == "WEBFETCH_CONTRACT_INVALID"
 
 
+def test_fetch_numeric_one_success_is_contract_invalid() -> None:
+    payload = _fetch_payload()
+    payload["success"] = 1
+
+    with (
+        _client(lambda _request: httpx.Response(200, json=payload)) as client,
+        pytest.raises(WebFetchClientError) as caught,
+    ):
+        client.fetch_text(FEED_URL)
+
+    assert caught.value.code == "WEBFETCH_CONTRACT_INVALID"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -376,6 +389,19 @@ def test_invalid_error_envelope_is_contract_invalid(field: str, value: object) -
 
     with (
         _client(lambda _request: httpx.Response(503, json=payload), max_attempts=1) as client,
+        pytest.raises(WebFetchClientError) as caught,
+    ):
+        client.fetch_text(FEED_URL)
+
+    assert caught.value.code == "WEBFETCH_CONTRACT_INVALID"
+
+
+def test_error_envelope_numeric_zero_success_is_contract_invalid() -> None:
+    payload = _error_payload(retryable=False, retry_after_seconds=None)
+    payload["success"] = 0
+
+    with (
+        _client(lambda _request: httpx.Response(400, json=payload), max_attempts=1) as client,
         pytest.raises(WebFetchClientError) as caught,
     ):
         client.fetch_text(FEED_URL)

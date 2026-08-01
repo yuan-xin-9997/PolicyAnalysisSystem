@@ -64,7 +64,7 @@ class _AttemptInfo(_ResponseModel):
 
 class _FetchResponse(_ResponseModel):
     request_id: StrictStr
-    success: Literal[True]
+    success: StrictBool
     requested_url: StrictStr
     final_url: StrictStr
     status_code: StrictInt
@@ -89,6 +89,13 @@ class _FetchResponse(_ResponseModel):
             raise ValueError("invalid fetched_at") from None
         return value
 
+    @field_validator("success")
+    @classmethod
+    def validate_success(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("invalid success marker")
+        return value
+
 
 class _ErrorDetail(_ResponseModel):
     code: StrictStr
@@ -106,8 +113,15 @@ class _ErrorDetail(_ResponseModel):
 
 class _ErrorEnvelope(_ResponseModel):
     request_id: StrictStr
-    success: Literal[False]
+    success: StrictBool
     error: _ErrorDetail
+
+    @field_validator("success")
+    @classmethod
+    def validate_failure(cls, value: bool) -> bool:
+        if value is not False:
+            raise ValueError("invalid success marker")
+        return value
 
 
 class WebFetchClient:
