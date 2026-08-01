@@ -118,4 +118,49 @@ describe('基础管理页面', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('配置暂时不可用。'))
   })
+
+  it('递归掩码数组内敏感键和敏感祖先的全部后代', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          values: {
+            integrations: [
+              { name: '公开适配器', api_key: 'array-api-key-must-not-leak' },
+              { nested: { token: 'nested-token-must-not-leak' }, enabled: true },
+            ],
+            session_secret: {
+              current: 'ancestor-current-must-not-leak',
+              history: ['ancestor-history-must-not-leak'],
+            },
+          },
+          sources: {
+            'integrations[0].name': 'config_file',
+            'integrations[0].api_key': 'environment',
+            'integrations[1].nested.token': 'environment',
+            'integrations[1].enabled': 'default',
+            'session_secret.current': 'environment',
+            'session_secret.history[0]': 'environment',
+          },
+          webfetch: { status: 'not_configured', checked: false },
+        }),
+      ),
+    )
+
+    render(SettingsView, { global: { plugins: [createPinia()] } })
+
+    expect(await screen.findByText('公开适配器')).toBeInTheDocument()
+    const pageText = document.body.textContent || ''
+    for (const secret of [
+      'array-api-key-must-not-leak',
+      'nested-token-must-not-leak',
+      'ancestor-current-must-not-leak',
+      'ancestor-history-must-not-leak',
+    ]) {
+      expect(pageText).not.toContain(secret)
+    }
+    expect(screen.getByText('integrations[0].api_key')).toBeInTheDocument()
+    expect(screen.getByText('session_secret.history[0]')).toBeInTheDocument()
+    expect(screen.getAllByText('********').length).toBeGreaterThanOrEqual(4)
+  })
 })

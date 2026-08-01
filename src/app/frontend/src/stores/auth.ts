@@ -36,6 +36,8 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<CurrentUser | null>(null)
   const csrfToken = ref(readSessionToken())
   const version = ref('v0.dev')
+  let initialized = false
+  let initializationPromise: Promise<boolean> | null = null
 
   async function login(username: string, password: string): Promise<void> {
     const response = await apiRequest<LoginResponse>('/auth/login', {
@@ -43,6 +45,7 @@ export const useAuthStore = defineStore('auth', () => {
       body: JSON.stringify({ username, password }),
     })
     user.value = fromApiUser(response.user)
+    initialized = true
     setCsrfToken(response.csrf_token)
     await loadVersion()
   }
@@ -50,6 +53,8 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout(): Promise<void> {
     try {
       await apiRequest<void>('/auth/logout', { method: 'POST' })
+    } catch {
+      // Local logout must complete even when the server cannot invalidate the session.
     } finally {
       clear()
     }
@@ -65,6 +70,25 @@ export const useAuthStore = defineStore('auth', () => {
       clear()
       return false
     }
+  }
+
+  function initialize(): Promise<boolean> {
+    if (initialized) return Promise.resolve(Boolean(user.value))
+    if (user.value) {
+      initialized = true
+      return Promise.resolve(true)
+    }
+    if (initializationPromise) return initializationPromise
+
+    initializationPromise = restore()
+      .then((restored) => {
+        initialized = true
+        return restored
+      })
+      .finally(() => {
+        initializationPromise = null
+      })
+    return initializationPromise
   }
 
   function clear(): void {
@@ -107,6 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     restore,
+    initialize,
     clear,
     canAccess,
     firstAccessiblePath,

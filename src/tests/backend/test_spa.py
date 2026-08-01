@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from policy_analysis.main import create_app
 
 
@@ -80,6 +80,46 @@ def test_spa_never_swallows_api_health_or_non_get_boundaries(
     assert non_get.status_code == 405
 
 
+def test_spa_preserves_matched_routes_that_intentionally_return_404(
+    auth_app: FastAPI,
+    client_context,
+    tmp_path: Path,
+) -> None:
+    app = _spa_app(auth_app, _spa_dist(tmp_path))
+
+    async def late_missing_route() -> None:
+        raise HTTPException(status_code=404, detail="late route missing")
+
+    app.add_api_route("/late/missing", late_missing_route, methods=["GET"])
+
+    with client_context(app) as client:
+        response = client.get("/late/missing")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert "policy-spa" not in response.text
+
+
+def test_spa_preserves_documentation_namespaces(
+    auth_app: FastAPI,
+    client_context,
+    tmp_path: Path,
+) -> None:
+    app = _spa_app(auth_app, _spa_dist(tmp_path))
+
+    with client_context(app) as client:
+        responses = [
+            client.get("/docs/missing"),
+            client.get("/redoc/missing"),
+            client.get("/openapi.json/missing"),
+        ]
+
+    for response in responses:
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/json")
+        assert "policy-spa" not in response.text
+
+
 def test_spa_rejects_directory_traversal_and_missing_assets(
     auth_app: FastAPI,
     client_context,
@@ -100,6 +140,48 @@ def test_spa_rejects_directory_traversal_and_missing_assets(
         assert response.status_code == 404
         assert response.headers["content-type"].startswith("application/json")
         assert "must-not-leak" not in response.text
+
+
+def test_spa_rejects_nul_backslashes_and_repeatedly_encoded_dot_segments(
+    auth_app: FastAPI,
+    client_context,
+    tmp_path: Path,
+) -> None:
+    app = _spa_app(auth_app, _spa_dist(tmp_path))
+    dangerous_paths = [
+        "/%00",
+        "/%5c..%5coutside-secret.txt",
+        "/%255c..%255coutside-secret.txt",
+        "/%252e%252e%252foutside-secret.txt",
+        "/safe/%252e%252e%252foutside-secret.txt",
+        "/assets/%252e%252e%252foutside-secret.txt",
+    ]
+
+    with client_context(app, raise_server_exceptions=False) as client:
+        responses = [client.get(path) for path in dangerous_paths]
+
+    for response in responses:
+        assert response.status_code in {400, 404}
+        assert response.headers["content-type"].startswith("application/json")
+        assert "policy-spa" not in response.text
+        assert response.headers["X-Request-ID"] == response.json()["error"]["request_id"]
+
+
+def test_spa_and_static_responses_preserve_request_id(
+    auth_app: FastAPI,
+    client_context,
+    tmp_path: Path,
+) -> None:
+    app = _spa_app(auth_app, _spa_dist(tmp_path))
+
+    with client_context(app) as client:
+        history = client.get("/policies/42")
+        static_file = client.get("/assets/app.js")
+
+    assert history.status_code == 200
+    assert history.headers["X-Request-ID"]
+    assert static_file.status_code == 200
+    assert static_file.headers["X-Request-ID"]
 
 
 def test_missing_frontend_dist_does_not_break_api_startup(

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { NAVIGATION_ITEMS } from '../navigation'
@@ -8,10 +8,17 @@ import { useAuthStore } from '../stores/auth'
 const auth = useAuthStore()
 const router = useRouter()
 const visibleItems = computed(() => NAVIGATION_ITEMS.filter((item) => auth.canAccess(item.code)))
+const signingOut = ref(false)
 
 async function signOut(): Promise<void> {
-  await auth.logout()
-  await router.replace('/login')
+  if (signingOut.value) return
+  signingOut.value = true
+  try {
+    await auth.logout()
+    await router.replace('/login')
+  } finally {
+    signingOut.value = false
+  }
 }
 </script>
 
@@ -39,8 +46,15 @@ async function signOut(): Promise<void> {
           <strong>{{ auth.user?.username }}</strong>
           <span class="version">{{ auth.version }}</span>
         </div>
-        <button class="signout-button" type="button" aria-label="退出登录" @click="signOut">
-          退出
+        <button
+          class="signout-button"
+          type="button"
+          aria-label="退出登录"
+          :aria-busy="signingOut"
+          :disabled="signingOut"
+          @click="signOut"
+        >
+          {{ signingOut ? '退出中…' : '退出' }}
         </button>
       </div>
     </aside>

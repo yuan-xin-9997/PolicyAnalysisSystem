@@ -7,7 +7,7 @@ from urllib.parse import unquote
 
 from argon2 import PasswordHasher
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import Engine
 
 from policy_analysis.auth.routes import router as auth_router
@@ -96,26 +96,60 @@ def _install_spa_routes(app: FastAPI, frontend_dist: Path) -> None:
         response = await call_next(request)
         if request.method != "GET" or response.status_code != 404:
             return response
-
-        raw_path = unquote(request.scope.get("raw_path", b"").decode("latin-1"))
-        decoded_parts = Path(raw_path).parts
-        spa_path = request.url.path.lstrip("/")
-        if ".." in decoded_parts or spa_path in {"api", "health"}:
+        if request.scope.get("route") is not None:
             return response
-        if spa_path.startswith(("api/", "health/")):
+
+        spa_path = _validated_spa_path(request)
+        if spa_path is None:
+            return response
+        if spa_path in {"api", "health", "docs", "redoc", "openapi.json"}:
+            return response
+        if spa_path.startswith(("api/", "health/", "docs/", "redoc/", "openapi.json/")):
             return response
 
         relative_path = Path(spa_path)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            return response
         candidate = (root / relative_path).resolve()
         if not candidate.is_relative_to(root):
             return response
         if candidate.is_file():
-            return FileResponse(candidate)
+            return _spa_file_response(candidate, response)
         if spa_path.startswith("assets/"):
             return response
-        return FileResponse(index, media_type="text/html")
+        return _spa_file_response(index, response, media_type="text/html")
+
+
+def _validated_spa_path(request: Request) -> str | None:
+    raw_path = request.scope.get("raw_path", b"")
+    if not isinstance(raw_path, bytes):
+        return None
+
+    decoded = raw_path.decode("latin-1")
+    for _ in range(5):
+        if _has_unsafe_path_content(decoded):
+            return None
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            return decoded.removeprefix("/")
+        decoded = next_decoded
+
+    if _has_unsafe_path_content(decoded) or unquote(decoded) != decoded:
+        return None
+    return decoded.removeprefix("/")
+
+
+def _has_unsafe_path_content(path: str) -> bool:
+    return (
+        not path.startswith("/")
+        or "\\" in path
+        or any(ord(character) < 32 or ord(character) == 127 for character in path)
+        or any(part in {".", ".."} for part in path.split("/"))
+    )
+
+
+def _spa_file_response(path: Path, original: Response, media_type: str | None = None) -> FileResponse:
+    request_id = original.headers.get("X-Request-ID")
+    headers = {"X-Request-ID": request_id} if request_id else None
+    return FileResponse(path, headers=headers, media_type=media_type)
 
 
 def _build_default_auth_service(settings: AppSettings | None = None) -> tuple[AuthService, Engine]:

@@ -100,4 +100,63 @@ describe('API 客户端', () => {
 
     expect(result).toBeInstanceOf(ApiError)
   })
+
+  it.each([
+    '/../system/info',
+    '/%2e%2e/system/info',
+    '/%252e%252e/system/info',
+    '/safe%2f..%2fauth/me',
+    '/users\\..\\auth\\login',
+    '/users%5c..%5cauth%5clogin',
+  ])('拒绝可能越出 API prefix 的路径：%s', async (unsafePath) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(apiRequest(unsafePath)).rejects.toThrow(TypeError)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('保留合法 query 且规范化 pathname 后判断登录 CSRF 豁免', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    setCsrfTokenProvider(() => 'stored-token')
+
+    await apiRequest('/users?page=2&page_size=20&sort_by=username&sort_order=asc')
+    await apiRequest('/auth/%6cogin?source=login', { method: 'POST' })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/v1/users?page=2&page_size=20&sort_by=username&sort_order=asc',
+    )
+    expect(new Headers((fetchMock.mock.calls[1][1] as RequestInit).headers).has('X-CSRF-Token')).toBe(
+      false,
+    )
+  })
+
+  it('删除调用方提供的 CSRF header，仅允许客户端策略写入', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    setCsrfTokenProvider(() => '')
+    await apiRequest('/users/reader/status', {
+      method: 'PATCH',
+      headers: { 'X-CSRF-Token': 'caller-token' },
+    })
+    setCsrfTokenProvider(() => 'store-token')
+    await apiRequest('/users/reader/status', {
+      method: 'PATCH',
+      headers: { 'X-CSRF-Token': 'caller-token' },
+    })
+
+    expect(new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers).has('X-CSRF-Token')).toBe(
+      false,
+    )
+    expect(
+      new Headers((fetchMock.mock.calls[1][1] as RequestInit).headers).get('X-CSRF-Token'),
+    ).toBe('store-token')
+  })
 })

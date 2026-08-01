@@ -3,13 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "type-check": "vue-tsc -b",
     "lint": "cd ../.. && app/frontend/node_modules/.bin/eslint --config app/frontend/eslint.config.js app/frontend/src tests/frontend app/frontend/vite.config.ts app/frontend/vitest.config.ts",
     "test": "vitest",
-    "test:e2e": "node -e \"console.log('Playwright E2E tests are planned for a later task; no browser tests ran.')\""
+    "test:e2e": "node -e \"console.error('Playwright E2E tests are not implemented; no browser tests ran.'); process.exit(1)\""
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

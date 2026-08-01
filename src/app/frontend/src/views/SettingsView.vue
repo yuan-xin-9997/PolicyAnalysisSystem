@@ -21,6 +21,7 @@ const errorMessage = ref('')
 const rows = computed<SettingRow[]>(() =>
   response.value ? flattenValues(response.value.values, response.value.sources) : [],
 )
+const SENSITIVE_KEY = /(password|secret|token|api_key)/i
 
 onMounted(loadSettings)
 
@@ -37,16 +38,34 @@ async function loadSettings(): Promise<void> {
 }
 
 function flattenValues(
-  value: Record<string, unknown>,
+  value: unknown,
   sources: SettingsResponse['sources'],
   prefix = '',
+  maskedAncestor = false,
 ): SettingRow[] {
-  return Object.entries(value).flatMap(([key, child]) => {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [settingRow(prefix, '[]', sources)]
+    return value.flatMap((child, index) =>
+      flattenValues(child, sources, `${prefix}[${index}]`, maskedAncestor),
+    )
+  }
+  if (!isRecord(value)) {
+    return [settingRow(prefix, maskedAncestor ? '********' : formatValue(value), sources)]
+  }
+  const entries = Object.entries(value)
+  if (entries.length === 0) return [settingRow(prefix, '{}', sources)]
+  return entries.flatMap(([key, child]) => {
     const path = prefix ? `${prefix}.${key}` : key
-    if (isRecord(child)) return flattenValues(child, sources, path)
-    const safeValue = /(password|secret|token|api_key)/i.test(path) ? '********' : formatValue(child)
-    return [{ key: path, value: safeValue, source: sourceLabel(sources[path]) }]
+    return flattenValues(child, sources, path, maskedAncestor || SENSITIVE_KEY.test(key))
   })
+}
+
+function settingRow(
+  key: string,
+  value: string,
+  sources: SettingsResponse['sources'],
+): SettingRow {
+  return { key, value, source: sourceLabel(sources[key]) }
 }
 
 function sourceLabel(source: SettingsResponse['sources'][string] | undefined): string {

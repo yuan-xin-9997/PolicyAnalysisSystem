@@ -136,4 +136,32 @@ describe('认证状态', () => {
     expect(auth.user?.pages).toEqual(['policies'])
     expect(auth.version).toBe('v0.42')
   })
+
+  it('并发首次初始化复用同一个 promise 且只恢复一次会话', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    let resolveMe!: (response: Response) => void
+    const meResponse = new Promise<Response>((resolve) => {
+      resolveMe = resolve
+    })
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(meResponse)
+      .mockResolvedValueOnce(jsonResponse({ version: 'v0.44', commit_sha: '1234567' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = useAuthStore()
+
+    const first = auth.initialize()
+    const second = auth.initialize()
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    resolveMe(
+      jsonResponse({ id: 7, username: 'reader', role: 'user', page_permissions: ['policies'] }),
+    )
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true])
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/auth/me',
+      '/api/v1/system/info',
+    ])
+  })
 })

@@ -1,12 +1,10 @@
 import { createPinia } from 'pinia'
 import { createApp } from 'vue'
-import ElementPlus from 'element-plus'
 
 import App from './App.vue'
 import { setCsrfTokenProvider, setUnauthorizedHandler } from './api/client'
 import { createPolicyRouter } from './router'
 import { useAuthStore } from './stores/auth'
-import 'element-plus/dist/index.css'
 import './styles/main.css'
 
 const app = createApp(App)
@@ -22,4 +20,4 @@ setUnauthorizedHandler(async () => {
   }
 })
 
-app.use(pinia).use(router).use(ElementPlus).mount('#app')
+app.use(pinia).use(router).mount('#app')

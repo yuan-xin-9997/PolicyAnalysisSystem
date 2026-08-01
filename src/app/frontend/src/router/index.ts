@@ -49,9 +49,9 @@ export function createPolicyRouter(
     const auth = useAuthStore(pinia)
     const isLogin = to.name === 'login'
 
-    if (!auth.user && !isLogin) {
-      const restored = await auth.restore()
-      if (!restored) return { name: 'login' }
+    const restored = await auth.initialize()
+    if (!restored) {
+      return isLogin ? true : { name: 'login' }
     }
     if (isLogin && auth.user) return auth.firstAccessiblePath()
     if (to.path === '/') return auth.firstAccessiblePath()
