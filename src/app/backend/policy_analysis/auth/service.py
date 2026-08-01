@@ -8,7 +8,7 @@ import os
 import secrets
 import time
 import unicodedata
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -67,7 +67,10 @@ class UserSyncService:
         text = _decode_utf8_or_none(contents)
         if text is None:
             raise PasswordFileError("密码文件编码无效")
-        entries = parse_password_text(text)
+        try:
+            entries = parse_password_text(text)
+        except ValueError:
+            raise PasswordFileError("密码文件内容无效") from None
         if not self._synchronize_transaction(entries):
             raise PasswordSyncError("密码同步数据库操作失败") from None
         self._last_fingerprint = fingerprint
@@ -108,7 +111,7 @@ class UserSyncService:
                 continue
             if before == opened == after_read == current:
                 return b"".join(chunks), current
-        raise RuntimeError("password.txt 文件读取不稳定")
+        raise PasswordFileError("password.txt 文件读取不稳定")
 
     def _synchronize(self, repository: UserRepository, entries: list[PasswordEntry]) -> None:
         synchronized_at = datetime.now(UTC)
@@ -182,6 +185,12 @@ class AuthenticatedSession:
     csrf_token_hash: str
 
 
+@dataclass(slots=True)
+class _LoginFailureWindow:
+    failures: deque[float]
+    last_activity: float
+
+
 class LoginRateLimiter:
     """Bound failed logins by peer address and canonical account identifier."""
 
@@ -190,12 +199,14 @@ class LoginRateLimiter:
         *,
         attempts: int,
         window_seconds: int,
+        max_active_keys: int,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._attempts = attempts
         self._window_seconds = window_seconds
+        self._max_active_keys = max_active_keys
         self._monotonic = monotonic or time.monotonic
-        self._failures: dict[tuple[str, str], deque[float]] = {}
+        self._failures: OrderedDict[tuple[str, str], _LoginFailureWindow] = OrderedDict()
         self._state_lock = Lock()
         self._key_locks = tuple(Lock() for _ in range(64))
 
@@ -209,34 +220,58 @@ class LoginRateLimiter:
     def ensure_allowed(self, key: tuple[str, str]) -> None:
         with self._state_lock:
             now = self._monotonic()
-            self._remove_expired(now)
-            if len(self._failures.get(key, ())) >= self._attempts:
-                raise APIError(
-                    status_code=429,
-                    code="LOGIN_RATE_LIMITED",
-                    message="登录尝试过于频繁，请稍后重试。",
-                )
+            self._remove_expired_from_oldest(now)
+            window = self._failures.get(key)
+            if window is None:
+                if len(self._failures) >= self._max_active_keys:
+                    raise _login_rate_limited()
+                self._failures[key] = _LoginFailureWindow(deque(), now)
+                return
+            self._remove_expired_failures(window, now)
+            if len(window.failures) >= self._attempts:
+                raise _login_rate_limited()
 
     def record_failure(self, key: tuple[str, str]) -> None:
         with self._state_lock:
             now = self._monotonic()
-            self._remove_expired(now)
-            self._failures.setdefault(key, deque()).append(now)
+            self._remove_expired_from_oldest(now)
+            window = self._failures.get(key)
+            if window is None:
+                if len(self._failures) >= self._max_active_keys:
+                    raise _login_rate_limited()
+                window = _LoginFailureWindow(deque(), now)
+                self._failures[key] = window
+            self._remove_expired_failures(window, now)
+            if len(window.failures) < self._attempts:
+                window.failures.append(now)
+                window.last_activity = now
+                self._failures.move_to_end(key)
 
     def clear(self, key: tuple[str, str]) -> None:
         with self._state_lock:
             self._failures.pop(key, None)
 
-    def _remove_expired(self, now: float) -> None:
+    def _remove_expired_from_oldest(self, now: float) -> None:
         cutoff = now - self._window_seconds
-        expired_keys: list[tuple[str, str]] = []
-        for key, failures in self._failures.items():
-            while failures and failures[0] <= cutoff:
-                failures.popleft()
-            if not failures:
-                expired_keys.append(key)
-        for key in expired_keys:
-            self._failures.pop(key, None)
+        while self._failures:
+            oldest_key = next(iter(self._failures))
+            oldest = self._failures[oldest_key]
+            if oldest.last_activity > cutoff:
+                return
+            self._failures.popitem(last=False)
+
+    def _remove_expired_failures(self, window: _LoginFailureWindow, now: float) -> None:
+        cutoff = now - self._window_seconds
+        while window.failures and window.failures[0] <= cutoff:
+            window.failures.popleft()
+
+
+def _login_rate_limited() -> APIError:
+    return APIError(
+        status_code=429,
+        code="LOGIN_RATE_LIMITED",
+        message="登录尝试过于频繁，请稍后重试。",
+    )
 
 
 class AuthService:
@@ -252,6 +287,7 @@ class AuthService:
         secure_cookie: bool,
         login_attempts: int,
         login_window_seconds: int,
+        login_max_active_keys: int,
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
@@ -265,6 +301,7 @@ class AuthService:
         self._login_limiter = LoginRateLimiter(
             attempts=login_attempts,
             window_seconds=login_window_seconds,
+            max_active_keys=login_max_active_keys,
             monotonic=monotonic,
         )
 
@@ -315,7 +352,7 @@ class AuthService:
     def _sync_users(self) -> None:
         try:
             self._user_sync.sync_if_changed()
-        except (PasswordFileError, PasswordSyncError, RuntimeError, ValueError):
+        except (PasswordFileError, PasswordSyncError):
             raise APIError(
                 status_code=503,
                 code="AUTH_SYNC_FAILED",

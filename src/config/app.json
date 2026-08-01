@@ -6,7 +6,8 @@
     "path": "src/data/app.sqlite3"
   },
   "auth": {
-    "password_file": "src/data/password.txt"
+    "password_file": "src/data/password.txt",
+    "login_max_active_keys": 4096
   },
   "webfetch": {
     "base_url": ""

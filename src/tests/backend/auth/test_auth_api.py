@@ -9,6 +9,8 @@ from threading import Barrier
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from policy_analysis.auth.models import PagePermission, SessionRecord, User
+from policy_analysis.auth.service import AuthService
+from policy_analysis.main import create_app
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -78,6 +80,25 @@ def test_wrong_password_unknown_user_and_inactive_user_share_public_error(
     assert _public_error(inactive_user) == _public_error(wrong_password)
 
 
+def test_existing_session_is_rejected_immediately_after_user_is_deactivated(
+    client: TestClient,
+    password_file: Path,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    password_file.write_text("reader:reader123:user\n", encoding="utf-8")
+    assert _login(client, username="reader", password="reader123").status_code == 200
+    with database_sessions() as database:
+        reader = database.scalar(select(User).where(User.username == "reader"))
+        assert reader is not None
+        reader.is_active = False
+        database.commit()
+
+    response = client.get("/api/v1/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "SESSION_INVALID"
+
+
 def test_session_and_csrf_tokens_are_random_but_only_hashes_are_persisted(
     client: TestClient,
     password_file: Path,
@@ -142,6 +163,29 @@ def test_expired_and_invalid_sessions_share_safe_unauthorized_response(
     assert _public_error(expired) == _public_error(invalid)
     assert raw_token not in expired.text
     assert "invalid-session-token" not in invalid.text
+
+
+def test_successful_me_updates_session_last_seen_at(
+    client: TestClient,
+    password_file: Path,
+    database_sessions: sessionmaker[Session],
+    mutable_clock,
+) -> None:
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+    assert _login(client).status_code == 200
+    with database_sessions() as database:
+        record = database.scalar(select(SessionRecord))
+        assert record is not None
+        initial_last_seen = record.last_seen_at
+
+    mutable_clock.advance(seconds=30)
+    assert client.get("/api/v1/auth/me").status_code == 200
+
+    with database_sessions() as database:
+        updated = database.scalar(select(SessionRecord))
+        assert updated is not None
+        assert updated.last_seen_at > initial_last_seen
+        assert updated.last_seen_at == mutable_clock.now()
 
 
 def test_wrong_csrf_is_rejected_and_logout_invalidates_the_database_session(
@@ -243,6 +287,27 @@ def test_successful_login_clears_only_the_matching_failure_window(
     assert limited.status_code == 429
 
 
+def test_successful_login_does_not_clear_a_second_account_window(
+    client: TestClient,
+    password_file: Path,
+) -> None:
+    password_file.write_text(
+        "admin:admin123:admin\nreader:reader123:user\n",
+        encoding="utf-8",
+    )
+    for _ in range(2):
+        assert _login(client, username="admin", password="wrong-password").status_code == 401
+        assert _login(client, username="reader", password="wrong-password").status_code == 401
+
+    assert _login(client, username="admin", password="admin123").status_code == 200
+
+    for _ in range(3):
+        assert _login(client, username="admin", password="wrong-password").status_code == 401
+    assert _login(client, username="admin", password="wrong-password").status_code == 429
+    assert _login(client, username="reader", password="wrong-password").status_code == 401
+    assert _login(client, username="reader", password="wrong-password").status_code == 429
+
+
 def test_rate_limit_uses_raw_peer_address_and_normalized_account_identifier(
     client: TestClient,
     password_file: Path,
@@ -264,6 +329,19 @@ def test_rate_limit_uses_raw_peer_address_and_normalized_account_identifier(
     assert limited.status_code == 429
 
 
+def test_nfkc_equivalent_account_identifiers_share_one_window(
+    client: TestClient,
+    password_file: Path,
+) -> None:
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+    identifiers = ["ａｄｍｉｎ", "admin", "ＡＤＭＩＮ"]
+
+    for identifier in identifiers:
+        assert _login(client, username=identifier, password="wrong-password").status_code == 401
+
+    assert _login(client, username="admin", password="wrong-password").status_code == 429
+
+
 def test_rate_limit_is_scoped_to_the_raw_peer_and_account_pair(
     auth_app: FastAPI,
     client_context: Callable[..., AbstractContextManager[TestClient]],
@@ -281,6 +359,27 @@ def test_rate_limit_is_scoped_to_the_raw_peer_and_account_pair(
         assert _login(second_peer, password="wrong-password").status_code == 401
         assert _login(first_peer, username="different-account", password="wrong-password").status_code == 401
         assert _login(first_peer, password="wrong-password").status_code == 429
+
+
+def test_new_login_key_fails_closed_when_active_capacity_is_full(
+    auth_app_factory: Callable[..., FastAPI],
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    password_file: Path,
+    mutable_clock,
+) -> None:
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+    app = auth_app_factory(login_max_active_keys=2)
+
+    with client_context(app) as capacity_client:
+        assert _login(capacity_client, username="missing-one").status_code == 401
+        assert _login(capacity_client, username="missing-two").status_code == 401
+        limited = _login(capacity_client, username="missing-three")
+        assert limited.status_code == 429
+        assert limited.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
+        assert "2" not in limited.json()["error"]["message"]
+
+        mutable_clock.advance(seconds=61)
+        assert _login(capacity_client, username="missing-three").status_code == 401
 
 
 def test_expired_rate_limit_window_is_removed_without_sleeping(
@@ -333,6 +432,40 @@ def test_password_file_sync_failure_returns_safe_error_without_credential_conten
     assert str(password_file) not in response.text
 
 
+def test_programming_error_in_user_sync_uses_safe_internal_error(
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    database_sessions: sessionmaker[Session],
+    password_hasher,
+    mutable_clock,
+) -> None:
+    secret = "programming-error-secret"
+
+    class FailingUserSync:
+        def sync_if_changed(self) -> bool:
+            raise RuntimeError(secret)
+
+    auth_service = AuthService(
+        sessions=database_sessions,
+        user_sync=FailingUserSync(),  # type: ignore[arg-type]
+        password_hasher=password_hasher,
+        session_hours=12,
+        secure_cookie=False,
+        login_attempts=3,
+        login_window_seconds=60,
+        login_max_active_keys=10,
+        now=mutable_clock.now,
+        monotonic=mutable_clock.monotonic,
+    )
+    app = create_app(auth_service=auth_service)
+
+    with client_context(app, raise_server_exceptions=False) as safe_client:
+        response = _login(safe_client)
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert secret not in response.text
+
+
 def test_unknown_api_route_uses_error_envelope_and_request_id(client: TestClient) -> None:
     response = client.get("/api/v1/unknown-resource")
 
@@ -341,6 +474,16 @@ def test_unknown_api_route_uses_error_envelope_and_request_id(client: TestClient
     assert error["code"] == "NOT_FOUND"
     assert error["request_id"] == response.headers["X-Request-ID"]
     assert error["details"] == {}
+
+
+def test_method_not_allowed_preserves_allow_header_and_request_id(client: TestClient) -> None:
+    response = client.get("/api/v1/auth/logout")
+
+    assert response.status_code == 405
+    error = response.json()["error"]
+    assert error["code"] == "METHOD_NOT_ALLOWED"
+    assert response.headers["Allow"] == "POST"
+    assert error["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_unexpected_database_error_does_not_expose_sql_or_credentials(
@@ -435,6 +578,42 @@ def test_concurrent_failures_cannot_burst_past_the_configured_limit(
 
     assert statuses.count(401) == 3
     assert statuses.count(429) == worker_count - 3
+
+
+def test_missing_asgi_peer_uses_stable_fallback_and_ignores_forwarded_for(
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    password_file: Path,
+) -> None:
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+
+    class WithoutClientPeer:
+        def __init__(self, app: FastAPI) -> None:
+            self.app = app
+
+        async def __call__(self, scope, receive, send) -> None:
+            if scope["type"] == "http":
+                scope = {**scope, "client": None}
+            await self.app(scope, receive, send)
+
+    wrapped_app = WithoutClientPeer(auth_app)
+    with client_context(wrapped_app) as no_peer_client:  # type: ignore[arg-type]
+        for index in range(3):
+            response = no_peer_client.post(
+                "/api/v1/auth/login",
+                headers={"X-Forwarded-For": f"203.0.113.{index + 1}"},
+                json={"username": "admin", "password": "wrong-password"},
+            )
+            assert response.status_code == 401
+
+        limited = no_peer_client.post(
+            "/api/v1/auth/login",
+            headers={"X-Forwarded-For": "203.0.113.99"},
+            json={"username": "admin", "password": "wrong-password"},
+        )
+
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
 
 
 def _login_with_forwarded_address(

@@ -84,3 +84,19 @@ def test_resolve_project_path_handles_relative_and_absolute_paths(tmp_path) -> N
 def test_parse_environment_value_decodes_json_and_preserves_plain_text() -> None:
     assert _parse_environment_value("3") == 3
     assert _parse_environment_value("plain-text") == "plain-text"
+
+
+def test_login_active_key_capacity_has_safe_default_and_bounds(tmp_path: Path) -> None:
+    config = tmp_path / "app.json"
+    config.write_text("{}", encoding="utf-8")
+
+    settings = load_settings(config_path=config, project_root=tmp_path, environ={})
+
+    assert settings.auth.login_max_active_keys == 4096
+    for invalid_capacity in (0, 100_001):
+        config.write_text(
+            json.dumps({"auth": {"login_max_active_keys": invalid_capacity}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValidationError):
+            load_settings(config_path=config, project_root=tmp_path, environ={})

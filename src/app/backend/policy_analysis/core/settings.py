@@ -28,6 +28,7 @@ class AuthSettings(StrictSettingsModel):
     secure_cookie: bool = False
     login_attempts: int = Field(default=5, ge=1, le=20)
     login_window_seconds: int = Field(default=300, ge=30, le=3600)
+    login_max_active_keys: int = Field(default=4096, ge=1, le=100_000)
 
 
 class WebFetchSettings(StrictSettingsModel):

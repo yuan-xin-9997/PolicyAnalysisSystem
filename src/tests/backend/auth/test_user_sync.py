@@ -1,4 +1,5 @@
 import os
+from collections.abc import Iterator
 from datetime import UTC
 from pathlib import Path
 
@@ -18,10 +19,13 @@ def password_hasher() -> PasswordHasher:
 
 
 @pytest.fixture
-def database_sessions(tmp_path: Path) -> sessionmaker[Session]:
+def database_sessions(tmp_path: Path) -> Iterator[sessionmaker[Session]]:
     engine = build_engine(tmp_path / "app.sqlite3")
     create_schema(engine)
-    return session_factory(engine)
+    try:
+        yield session_factory(engine)
+    finally:
+        engine.dispose()
 
 
 def _write_password_file(path: Path, text: str, previous_mtime_ns: int | None = None) -> int:
@@ -370,7 +374,7 @@ def test_sync_rejects_invalid_file_without_partial_database_update(
 
     _write_password_file(password_file, invalid_contents, initial_mtime_ns)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PasswordFileError):
         service.sync_if_changed()
 
     reader = _user(database_sessions, "reader")

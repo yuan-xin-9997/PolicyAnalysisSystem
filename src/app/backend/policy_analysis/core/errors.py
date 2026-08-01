@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -80,6 +81,7 @@ def install_error_handlers(app: FastAPI) -> None:
             status_code=error.status_code,
             code=code,
             message=message,
+            headers=error.headers,
         )
 
     @app.exception_handler(Exception)
@@ -100,11 +102,14 @@ def _error_response(
     code: str,
     message: str,
     details: dict[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     request_id = getattr(request.state, "request_id", secrets.token_urlsafe(16))
+    response_headers = dict(headers or {})
+    response_headers["X-Request-ID"] = request_id
     return JSONResponse(
         status_code=status_code,
-        headers={"X-Request-ID": request_id},
+        headers=response_headers,
         content={
             "error": {
                 "code": code,

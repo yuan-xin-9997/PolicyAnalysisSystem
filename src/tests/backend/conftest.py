@@ -47,10 +47,13 @@ def password_file(project_root: Path) -> Path:
 
 
 @pytest.fixture
-def database_sessions(project_root: Path) -> sessionmaker[Session]:
+def database_sessions(project_root: Path) -> Iterator[sessionmaker[Session]]:
     engine = build_engine(project_root / "app.sqlite3")
     create_schema(engine)
-    return session_factory(engine)
+    try:
+        yield session_factory(engine)
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture
@@ -75,6 +78,7 @@ def auth_app_factory(
         secure_cookie: bool = False,
         login_attempts: int = 3,
         login_window_seconds: int = 60,
+        login_max_active_keys: int = 4096,
     ) -> FastAPI:
         user_sync = UserSyncService(password_file, database_sessions, password_hasher)
         auth_service = AuthService(
@@ -85,6 +89,7 @@ def auth_app_factory(
             secure_cookie=secure_cookie,
             login_attempts=login_attempts,
             login_window_seconds=login_window_seconds,
+            login_max_active_keys=login_max_active_keys,
             now=mutable_clock.now,
             monotonic=mutable_clock.monotonic,
         )
