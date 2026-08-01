@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
+import idna
+
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
@@ -14,7 +16,16 @@ def normalize_dns_name(value: str) -> str:
     domain = value.strip().rstrip(".")
     if not domain:
         raise ValueError("invalid DNS name")
-    ascii_domain = domain.encode("idna").decode("ascii").lower()
+    try:
+        ascii_domain = idna.encode(
+            domain,
+            uts46=True,
+            std3_rules=True,
+            transitional=False,
+        ).decode("ascii")
+    except idna.IDNAError:
+        raise ValueError("invalid IDNA DNS name") from None
+    ascii_domain = ascii_domain.lower()
     if len(ascii_domain) > 253:
         raise ValueError("DNS name is too long")
     labels = ascii_domain.split(".")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime
 
+import httpx
 import pytest
 from policy_analysis.core.errors import APIError
 from policy_analysis.sources.models import (
@@ -20,6 +21,7 @@ from policy_analysis.sources.schemas import (
     SeedUrlImport,
 )
 from policy_analysis.sources.service import SourceService
+from policy_analysis.sources.url_validation import normalized_http_hostname
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -194,6 +196,66 @@ def test_rule_accepts_exact_subdomain_case_trailing_dot_and_idna_hosts(
         discovery={"rss_urls": [url], "channel_urls": []},
     )
     assert rule.discovery.rss_urls == [url]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://faß.de/article",
+        "https://ς.gr/article",
+        "https://σ.gr/article",
+        "https://BÜCHER.example/article",
+    ],
+)
+def test_url_hostname_normalization_matches_httpx_idna2008(url: str) -> None:
+    assert normalized_http_hostname(url) == httpx.URL(url).raw_host.decode("ascii")
+
+
+@pytest.mark.parametrize("hostname", ["ab\u200c.cd", "ab\u200d.cd"])
+def test_url_hostname_rejects_context_invalid_zero_width_joiners(hostname: str) -> None:
+    with pytest.raises(httpx.InvalidURL):
+        httpx.URL(f"https://{hostname}/article")
+    with pytest.raises(ValueError):
+        normalized_http_hostname(f"https://{hostname}/article")
+
+
+def test_rule_does_not_confuse_idna2003_transitional_allowed_domain(
+    source_service: SourceService,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    with database_sessions.begin() as database:
+        database.add(
+            Source(
+                code="idna_boundary",
+                name="IDNA 边界来源",
+                organization="测试机构",
+                base_url="https://fass.de/",
+                adapter_type="test",
+                allowed_domains_json='["fass.de"]',
+                is_active=True,
+            )
+        )
+
+    assert_api_error(
+        "URL_NOT_ALLOWED",
+        422,
+        lambda: create_rule(
+            source_service,
+            source_code="idna_boundary",
+            discovery={"rss_urls": ["https://faß.de/article"], "channel_urls": []},
+        ),
+    )
+
+    with database_sessions.begin() as database:
+        source = database.scalar(select(Source).where(Source.code == "idna_boundary"))
+        assert source is not None
+        source.allowed_domains_json = '["faß.de"]'
+    accepted = create_rule(
+        source_service,
+        source_code="idna_boundary",
+        discovery={"rss_urls": ["https://faß.de/article"], "channel_urls": []},
+    )
+    assert accepted.source.allowed_domains == ["xn--fa-hia.de"]
 
 
 def test_schema_and_service_reject_ambiguous_or_non_dns_url_hosts(
