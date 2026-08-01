@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 import pytest
 from policy_analysis.core.errors import APIError
 from policy_analysis.sources.models import (
+    CollectionRule,
     PolicyCategory,
     Schedule,
     SeedUrl,
@@ -195,6 +196,46 @@ def test_rule_accepts_exact_subdomain_case_trailing_dot_and_idna_hosts(
     assert rule.discovery.rss_urls == [url]
 
 
+def test_schema_and_service_reject_ambiguous_or_non_dns_url_hosts(
+    source_service: SourceService,
+) -> None:
+    rule = create_rule(source_service)
+    unsafe_urls = [
+        r"https://169.254.169.254\.news.cn/latest/meta-data",
+        "https://news.cn/with\x00nul",
+        "https://news.cn/with\x1fcontrol",
+        "https://news.cn/with\x7fcontrol",
+        "https://news.cn/with\x80control",
+        "https://169.254.169.254%5C.news.cn/latest/meta-data",
+        "https://bad..news.cn/article",
+        "https://_service.news.cn/article",
+        "https://-bad.news.cn/article",
+        "https://bad-.news.cn/article",
+        f"https://{'a' * 64}.news.cn/article",
+    ]
+
+    for url in unsafe_urls:
+        with pytest.raises(ValidationError):
+            SeedUrlImport.model_validate(
+                {
+                    "url": url,
+                    "expected_title": "非法 URL 不应进入采集",
+                    "expected_published_date": date(2026, 7, 30),
+                }
+            )
+        unchecked = SeedUrlImport.model_construct(
+            url=url,
+            expected_title="非法 URL 不应进入采集",
+            expected_published_date=date(2026, 7, 30),
+            is_verified=False,
+        )
+        assert_api_error(
+            "URL_NOT_ALLOWED",
+            422,
+            lambda unchecked=unchecked: source_service.import_seed_urls(rule.id, [unchecked]),
+        )
+
+
 def test_patch_merges_before_revalidating_every_rule_invariant(
     source_service: SourceService,
 ) -> None:
@@ -226,6 +267,96 @@ def test_patch_merges_before_revalidating_every_rule_invariant(
     assert updated.include_keywords == original.include_keywords
     assert updated.exclude_keywords == ["直播"]
     assert updated.discovery == original.discovery
+
+
+def test_patch_revalidates_stored_rule_and_persists_schema_normalization(
+    source_service: SourceService,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    invalid_mutations = [
+        ("name", "   "),
+        ("include_keywords_json", json.dumps(["关键词"] * 65, ensure_ascii=False)),
+        ("include_keywords_json", json.dumps(["过" * 129], ensure_ascii=False)),
+    ]
+    for field_name, bad_value in invalid_mutations:
+        rule = create_rule(source_service)
+        with database_sessions.begin() as database:
+            stored = database.get(CollectionRule, rule.id)
+            assert stored is not None
+            setattr(stored, field_name, bad_value)
+
+        assert_api_error(
+            "RULE_CONFIGURATION_INVALID",
+            422,
+            lambda rule_id=rule.id: source_service.update_rule(
+                rule_id,
+                CollectionRuleUpdate.model_validate({"is_active": False}),
+            ),
+        )
+        with database_sessions() as database:
+            stored = database.get(CollectionRule, rule.id)
+            assert stored is not None
+            assert getattr(stored, field_name) == bad_value
+            assert stored.is_active is True
+
+    rule = create_rule(source_service)
+    with database_sessions.begin() as database:
+        stored = database.get(CollectionRule, rule.id)
+        assert stored is not None
+        stored.name = " 现场规则 "
+        stored.include_keywords_json = json.dumps([" 政策 ", "政策"], ensure_ascii=False)
+        stored.exclude_keywords_json = json.dumps([" 视频 ", "视频"], ensure_ascii=False)
+
+    updated = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"is_active": False}),
+    )
+    assert updated.name == "现场规则"
+    assert updated.include_keywords == ["政策"]
+    assert updated.exclude_keywords == ["视频"]
+    assert updated.source.code == rule.source.code
+    assert updated.category.code == rule.category.code
+    assert updated.history_years == rule.history_years
+    assert updated.discovery == rule.discovery
+    with database_sessions() as database:
+        stored = database.get(CollectionRule, rule.id)
+        assert stored is not None
+        assert stored.name == "现场规则"
+        assert stored.include_keywords_json == '["政策"]'
+        assert stored.exclude_keywords_json == '["视频"]'
+
+    repairable = create_rule(source_service)
+    with database_sessions.begin() as database:
+        stored = database.get(CollectionRule, repairable.id)
+        assert stored is not None
+        stored.include_keywords_json = "not-json"
+    repaired = source_service.update_rule(
+        repairable.id,
+        CollectionRuleUpdate.model_validate({"include_keywords": [" 修复后的关键词 "], "is_active": False}),
+    )
+    assert repaired.include_keywords == ["修复后的关键词"]
+    assert repaired.is_active is False
+
+    still_invalid = create_rule(source_service)
+    with database_sessions.begin() as database:
+        stored = database.get(CollectionRule, still_invalid.id)
+        assert stored is not None
+        stored.name = "   "
+        stored.include_keywords_json = "not-json"
+    assert_api_error(
+        "RULE_CONFIGURATION_INVALID",
+        422,
+        lambda: source_service.update_rule(
+            still_invalid.id,
+            CollectionRuleUpdate.model_validate({"include_keywords": ["只修复一个字段"], "is_active": False}),
+        ),
+    )
+    with database_sessions() as database:
+        stored = database.get(CollectionRule, still_invalid.id)
+        assert stored is not None
+        assert stored.name == "   "
+        assert stored.include_keywords_json == "not-json"
+        assert stored.is_active is True
 
 
 def test_disabled_rule_can_keep_inactive_binding_but_cannot_be_reenabled(

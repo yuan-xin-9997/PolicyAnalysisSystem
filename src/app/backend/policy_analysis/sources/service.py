@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from apscheduler.triggers.cron import CronTrigger
@@ -29,6 +28,7 @@ from policy_analysis.sources.schemas import (
     SeedUrlImport,
     SourceRead,
 )
+from policy_analysis.sources.url_validation import normalize_dns_name, normalized_http_hostname
 
 SHANGHAI_TIMEZONE = "Asia/Shanghai"
 _SHANGHAI = ZoneInfo(SHANGHAI_TIMEZONE)
@@ -97,16 +97,6 @@ class SourceService:
                 if rule is None:
                     raise _not_found("RULE_NOT_FOUND", "采集规则不存在。")
                 values = payload.model_dump(exclude_unset=True)
-                source = (
-                    _require_source(repository, values["source_code"])
-                    if "source_code" in values
-                    else rule.source
-                )
-                category = (
-                    _require_category(repository, values["category_code"])
-                    if "category_code" in values
-                    else rule.category
-                )
                 include_keywords = (
                     values["include_keywords"]
                     if "include_keywords" in values
@@ -126,24 +116,40 @@ class SourceService:
                     )
                 )
                 discovery = (
-                    payload.discovery
+                    values["discovery"]
                     if "discovery" in values
                     else _decode_discovery(rule.discovery_config_json)
                 )
-                is_active = values.get("is_active", rule.is_active)
-                _validate_rule_bindings(source, category, is_active=is_active)
-                _validate_discovery_domains(discovery, source)
+                try:
+                    merged = CollectionRuleCreate.model_validate(
+                        {
+                            "name": values.get("name", rule.name),
+                            "source_code": values.get("source_code", rule.source.code),
+                            "category_code": values.get("category_code", rule.category.code),
+                            "include_keywords": include_keywords,
+                            "exclude_keywords": exclude_keywords,
+                            "history_years": values.get("history_years", rule.history_years),
+                            "discovery": discovery,
+                            "is_active": values.get("is_active", rule.is_active),
+                        }
+                    )
+                except ValidationError:
+                    raise _configuration_error("RULE_CONFIGURATION_INVALID") from None
+                source = _require_source(repository, merged.source_code)
+                category = _require_category(repository, merged.category_code)
+                _validate_rule_bindings(source, category, is_active=merged.is_active)
+                _validate_discovery_domains(merged.discovery, source)
 
                 rule.source_id = source.id
                 rule.category_id = category.id
                 rule.source = source
                 rule.category = category
-                rule.name = values.get("name", rule.name)
-                rule.include_keywords_json = _encode_json(include_keywords)
-                rule.exclude_keywords_json = _encode_json(exclude_keywords)
-                rule.history_years = values.get("history_years", rule.history_years)
-                rule.discovery_config_json = _encode_json(discovery.model_dump())
-                rule.is_active = is_active
+                rule.name = merged.name
+                rule.include_keywords_json = _encode_json(merged.include_keywords)
+                rule.exclude_keywords_json = _encode_json(merged.exclude_keywords)
+                rule.history_years = merged.history_years
+                rule.discovery_config_json = _encode_json(merged.discovery.model_dump())
+                rule.is_active = merged.is_active
                 session.flush()
                 result = _rule_to_read(rule)
         except IntegrityError:
@@ -381,22 +387,8 @@ def _validate_discovery_domains(discovery: DiscoveryConfig, source: Source) -> N
 
 def _validate_url_domain(url: str, allowed_domains: Iterable[str]) -> None:
     try:
-        parsed = urlsplit(url)
-        hostname = parsed.hostname
-        port = parsed.port
-    except (UnicodeError, ValueError):
-        raise _url_not_allowed() from None
-    del port
-    if (
-        parsed.scheme.lower() not in {"http", "https"}
-        or hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise _url_not_allowed()
-    try:
-        normalized_host = _normalize_domain(hostname)
-    except (UnicodeError, ValueError):
+        normalized_host = normalized_http_hostname(url)
+    except ValueError:
         raise _url_not_allowed() from None
     if not any(
         normalized_host == allowed or normalized_host.endswith(f".{allowed}") for allowed in allowed_domains
@@ -405,14 +397,7 @@ def _validate_url_domain(url: str, allowed_domains: Iterable[str]) -> None:
 
 
 def _normalize_domain(value: str) -> str:
-    domain = value.strip().rstrip(".")
-    if (
-        not domain
-        or any(character in domain for character in "/:@?#")
-        or any(character.isspace() for character in domain)
-    ):
-        raise ValueError("invalid domain")
-    return domain.encode("idna").decode("ascii").lower()
+    return normalize_dns_name(value)
 
 
 def _parse_cron(expression: str) -> tuple[str, CronTrigger]:

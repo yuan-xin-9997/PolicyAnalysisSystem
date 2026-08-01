@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from policy_analysis.auth.models import PagePermission, User
-from policy_analysis.sources.models import PolicyCategory, Source
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, Schedule, Source
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -127,6 +127,7 @@ def test_read_endpoints_require_authentication_and_tasks_permission(
 
 
 def test_writes_require_admin_and_csrf(
+    client: TestClient,
     admin_client: TestClient,
     user_client: TestClient,
     database_sessions: sessionmaker[Session],
@@ -140,6 +141,15 @@ def test_writes_require_admin_and_csrf(
         database.add(PagePermission(user_id=user.id, page_code="tasks"))
     denied = user_client.post("/api/v1/collection-rules", json=rule_payload(), headers=csrf(user_client))
     assert denied.status_code == 403
+    assert client.post("/api/v1/collection-rules?unexpected=1", json=rule_payload()).status_code == 401
+    assert (
+        user_client.post(
+            "/api/v1/collection-rules?unexpected=1",
+            json=rule_payload(),
+            headers=csrf(user_client),
+        ).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize(
@@ -189,6 +199,57 @@ def test_list_endpoints_reject_undeclared_query_parameters(admin_client: TestCli
     response = admin_client.get(path)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_write_endpoints_reject_undeclared_query_parameters_before_mutation(
+    admin_client: TestClient,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    rule = admin_client.post(
+        "/api/v1/collection-rules",
+        json=rule_payload(),
+        headers=csrf(admin_client),
+    ).json()
+    schedule = admin_client.post(
+        "/api/v1/schedules",
+        json={"rule_id": rule["id"], "cron_expression": "0 9 * * *"},
+        headers=csrf(admin_client),
+    ).json()
+    requests = [
+        (
+            "post",
+            "/api/v1/collection-rules?unexpected=1",
+            rule_payload(name="不应创建的规则"),
+        ),
+        (
+            "patch",
+            f"/api/v1/collection-rules/{rule['id']}?unexpected=1",
+            {"name": "不应写入的名称"},
+        ),
+        (
+            "post",
+            "/api/v1/schedules?unexpected=1",
+            {"rule_id": rule["id"], "cron_expression": "30 9 * * *"},
+        ),
+        (
+            "patch",
+            f"/api/v1/schedules/{schedule['id']}?unexpected=1",
+            {"is_active": True},
+        ),
+    ]
+
+    for method, path, payload in requests:
+        response = getattr(admin_client, method)(path, json=payload, headers=csrf(admin_client))
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    with database_sessions() as database:
+        rules = list(database.scalars(select(CollectionRule)))
+        schedules = list(database.scalars(select(Schedule)))
+        assert len(rules) == 1
+        assert rules[0].name == "中央政治局会议"
+        assert len(schedules) == 1
+        assert schedules[0].is_active is False
 
 
 def test_schema_rejects_client_controlled_schedule_fields_and_extra_rule_fields(

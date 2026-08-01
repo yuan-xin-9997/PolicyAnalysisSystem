@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Annotated
-from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -15,6 +14,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from policy_analysis.sources.url_validation import normalized_http_hostname
 
 TrimmedCode = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 TrimmedName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
@@ -32,16 +33,9 @@ def _deduplicate(values: list[str]) -> list[str]:
 
 def _validate_http_url(value: str) -> str:
     try:
-        parsed = urlsplit(value)
-        hostname = parsed.hostname
-        port = parsed.port
-    except (UnicodeError, ValueError):
+        normalized_http_hostname(value)
+    except ValueError:
         raise ValueError("URL 格式无效") from None
-    del port
-    if parsed.scheme.lower() not in {"http", "https"} or hostname is None:
-        raise ValueError("URL 必须使用 HTTP(S) 且包含主机名")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("URL 不得包含用户凭据")
     return value
 
 

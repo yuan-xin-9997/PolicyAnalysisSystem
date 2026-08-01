@@ -75,9 +75,11 @@ def list_collection_rules(
 )
 def create_collection_rule(
     payload: CollectionRuleCreate,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: SourceService = Depends(get_source_service),
 ) -> CollectionRuleRead:
+    _reject_query_parameters(request)
     return service.create_rule(payload)
 
 
@@ -85,9 +87,11 @@ def create_collection_rule(
 def update_collection_rule(
     rule_id: PositiveId,
     payload: CollectionRuleUpdate,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: SourceService = Depends(get_source_service),
 ) -> CollectionRuleRead:
+    _reject_query_parameters(request)
     return service.update_rule(rule_id, payload)
 
 
@@ -108,9 +112,11 @@ def list_schedules(
 )
 def create_schedule(
     payload: ScheduleCreate,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: SourceService = Depends(get_source_service),
 ) -> ScheduleRead:
+    _reject_query_parameters(request)
     return service.create_schedule(payload)
 
 
@@ -118,7 +124,9 @@ def create_schedule(
 def update_schedule(
     schedule_id: PositiveId,
     payload: ScheduleUpdate,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: SourceService = Depends(get_source_service),
 ) -> ScheduleRead:
+    _reject_query_parameters(request)
     return service.update_schedule(schedule_id, payload)
