@@ -4,8 +4,10 @@ from pathlib import Path
 import pytest
 from policy_analysis.core.paths import resolve_project_path
 from policy_analysis.core.settings import (
+    AppSettings,
     _parse_environment_value,
     load_settings,
+    load_settings_snapshot,
     masked_settings,
     settings_sources,
 )
@@ -135,3 +137,63 @@ def test_top_level_json_environment_object_marks_each_effective_leaf_as_environm
     assert sources["server.host"] == "environment"
     assert sources["server.port"] == "environment"
     assert "server" not in sources
+
+
+def test_top_level_environment_object_replaces_config_source_subtree(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "app.json"
+    config.write_text('{"server":{"host":"config-host"}}', encoding="utf-8")
+
+    snapshot = load_settings_snapshot(
+        config,
+        tmp_path,
+        {"POLICY_ANALYSIS_SERVER": '{"port":31001}'},
+    )
+
+    assert snapshot.settings.server.host == "127.0.0.1"
+    assert snapshot.settings.server.port == 31001
+    assert snapshot.sources["server.host"] == "default"
+    assert snapshot.sources["server.port"] == "environment"
+    assert set(snapshot.sources) == _leaf_paths(masked_settings(snapshot.settings))
+
+
+def test_nested_environment_leaf_overrides_replaced_top_level_object_source(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "app.json"
+    config.write_text('{"server":{"host":"config-host"}}', encoding="utf-8")
+
+    snapshot = load_settings_snapshot(
+        config,
+        tmp_path,
+        {
+            "POLICY_ANALYSIS_SERVER": '{"port":31001}',
+            "POLICY_ANALYSIS_SERVER__HOST": "nested-environment-host",
+        },
+    )
+
+    assert snapshot.settings.server.host == "nested-environment-host"
+    assert snapshot.settings.server.port == 31001
+    assert snapshot.sources["server.host"] == "environment"
+    assert snapshot.sources["server.port"] == "environment"
+    assert set(snapshot.sources) == _leaf_paths(masked_settings(snapshot.settings))
+
+
+def test_pagination_settings_have_validated_defaults_and_bounds() -> None:
+    settings = AppSettings()
+
+    assert settings.pagination.default_page_size == 50
+    assert settings.pagination.max_page_size == 100
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"pagination": {"default_page_size": 20, "max_page_size": 10}})
+
+
+def _leaf_paths(value: object, prefix: str = "") -> set[str]:
+    if not isinstance(value, dict):
+        return {prefix}
+    result: set[str] = set()
+    for key, child in value.items():
+        child_prefix = f"{prefix}.{key}" if prefix else key
+        result.update(_leaf_paths(child, child_prefix))
+    return result

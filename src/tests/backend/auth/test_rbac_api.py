@@ -14,6 +14,7 @@ from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.password_file import (
     PasswordFileOperationError,
     parse_password_text,
+    replace_password_file,
 )
 from policy_analysis.auth.permissions import PageCode, can_access, require_page
 from policy_analysis.auth.service import (
@@ -693,6 +694,103 @@ def test_password_reset_and_deactivation_revoke_all_target_sessions(
         assert list(database.scalars(select(SessionRecord).where(SessionRecord.user_id == user.id))) == []
 
 
+def test_final_truth_sync_revokes_old_cookie_when_failed_password_change_leaves_new_file(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = admin_client.post(
+        "/api/v1/users",
+        json={
+            "username": "final-truth-user",
+            "password": "initial-final-truth-password",
+            "role": "user",
+            "pages": [],
+        },
+        headers=_csrf(admin_client),
+    )
+    assert created.status_code == 201
+    with client_context(auth_app) as target_client:
+        login = target_client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "final-truth-user",
+                "password": "initial-final-truth-password",
+            },
+        )
+        assert login.status_code == 200
+        service = auth_app.state.user_administration_service
+        real_session = service._sessions()
+
+        class CommitFailureSession:
+            def __getattr__(self, name: str):
+                return getattr(real_session, name)
+
+            def commit(self) -> None:
+                raise RuntimeError("database commit failure")
+
+        service._sessions = lambda: CommitFailureSession()
+
+        def leave_new_password_file(*_args, **_kwargs) -> None:
+            raise RuntimeError("compensation failure")
+
+        monkeypatch.setattr(service, "_compensate", leave_new_password_file)
+        changed = admin_client.patch(
+            "/api/v1/users/final-truth-user/password",
+            json={"password": "new-final-truth-password"},
+            headers=_csrf(admin_client),
+        )
+
+        assert changed.status_code == 503
+        assert target_client.get("/api/v1/auth/me").status_code == 401
+        relogin = target_client.post(
+            "/api/v1/auth/login",
+            json={"username": "final-truth-user", "password": "new-final-truth-password"},
+        )
+        assert relogin.status_code == 200
+
+
+def test_password_source_remove_and_readd_never_resurrects_old_cookie(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    password_file: Path,
+) -> None:
+    created = admin_client.post(
+        "/api/v1/users",
+        json={
+            "username": "remove-readd-user",
+            "password": "remove-readd-safe-password",
+            "role": "user",
+            "pages": [],
+        },
+        headers=_csrf(admin_client),
+    )
+    assert created.status_code == 201
+    sync = auth_app.state.auth_service.user_sync
+
+    with client_context(auth_app) as target_client:
+        login = target_client.post(
+            "/api/v1/auth/login",
+            json={"username": "remove-readd-user", "password": "remove-readd-safe-password"},
+        )
+        assert login.status_code == 200
+        entries = parse_password_text(password_file.read_text(encoding="utf-8"))
+        removed_entry = next(entry for entry in entries if entry.username == "remove-readd-user")
+        replace_password_file(
+            password_file,
+            [entry for entry in entries if entry.username != "remove-readd-user"],
+        )
+        assert sync.sync_if_changed() is True
+        assert target_client.get("/api/v1/auth/me").status_code == 401
+
+        current_entries = parse_password_text(password_file.read_text(encoding="utf-8"))
+        replace_password_file(password_file, [*current_entries, removed_entry])
+        assert sync.sync_if_changed() is True
+        assert target_client.get("/api/v1/auth/me").status_code == 401
+
+
 @pytest.mark.parametrize(
     ("suffix", "payload"),
     [("role", {"role": "user"}), ("status", {"is_active": False})],
@@ -779,7 +877,7 @@ def test_failed_dual_write_runs_rollback_compensation_sync_and_close_even_when_e
 
     def fail_compensation(*_args, **_kwargs):
         cleanup_calls.append("compensate")
-        raise SystemExit("compensation failed")
+        raise RuntimeError("compensation failed")
 
     def fail_sync() -> None:
         cleanup_calls.append("sync")
@@ -798,15 +896,230 @@ def test_failed_dual_write_runs_rollback_compensation_sync_and_close_even_when_e
         os.chmod(password_file, 0o600)
 
 
+def test_cleanup_keyboard_interrupt_wins_after_all_recovery_stages_run(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del admin_client
+    service = auth_app.state.user_administration_service
+    original = password_file.read_bytes()
+    real_session = service._sessions()
+    cleanup_calls: list[str] = []
+
+    class FailingSession:
+        def __getattr__(self, name: str):
+            return getattr(real_session, name)
+
+        def commit(self) -> None:
+            raise RuntimeError("primary ordinary failure")
+
+        def rollback(self) -> None:
+            cleanup_calls.append("rollback")
+            raise KeyboardInterrupt("rollback interruption")
+
+        def close(self) -> None:
+            cleanup_calls.append("close")
+            real_session.close()
+
+    service._sessions = lambda: FailingSession()
+
+    def compensate(*_args, **_kwargs) -> None:
+        cleanup_calls.append("compensate")
+
+    def final_sync() -> None:
+        cleanup_calls.append("final_sync")
+
+    monkeypatch.setattr(service, "_compensate", compensate)
+    monkeypatch.setattr(service, "_synchronize_final_file", final_sync)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="rollback interruption"):
+            service.create_user("rollback-ki", "rollback-ki-safe-password", "user", set())
+        assert cleanup_calls == ["rollback", "compensate", "final_sync", "close"]
+    finally:
+        real_session.rollback()
+        real_session.close()
+        password_file.write_bytes(original)
+        os.chmod(password_file, 0o600)
+
+
+def test_compensation_system_exit_wins_but_final_sync_and_close_still_run(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del admin_client
+    service = auth_app.state.user_administration_service
+    original = password_file.read_bytes()
+    real_session = service._sessions()
+    cleanup_calls: list[str] = []
+
+    class FailingSession:
+        def __getattr__(self, name: str):
+            return getattr(real_session, name)
+
+        def commit(self) -> None:
+            raise RuntimeError("primary ordinary failure")
+
+        def rollback(self) -> None:
+            cleanup_calls.append("rollback")
+            real_session.rollback()
+
+        def close(self) -> None:
+            cleanup_calls.append("close")
+            real_session.close()
+
+    service._sessions = lambda: FailingSession()
+
+    def fail_compensation(*_args, **_kwargs) -> None:
+        cleanup_calls.append("compensate")
+        raise SystemExit("compensation exit")
+
+    def final_sync() -> None:
+        cleanup_calls.append("final_sync")
+
+    monkeypatch.setattr(service, "_compensate", fail_compensation)
+    monkeypatch.setattr(service, "_synchronize_final_file", final_sync)
+    try:
+        with pytest.raises(SystemExit, match="compensation exit"):
+            service.create_user("compensation-exit", "compensation-safe-password", "user", set())
+        assert cleanup_calls == ["rollback", "compensate", "final_sync", "close"]
+    finally:
+        real_session.rollback()
+        real_session.close()
+        password_file.write_bytes(original)
+        os.chmod(password_file, 0o600)
+
+
+def test_successful_commit_does_not_translate_close_keyboard_interrupt(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+) -> None:
+    del admin_client
+    service = auth_app.state.user_administration_service
+    original = password_file.read_bytes()
+    real_session = service._sessions()
+
+    class CloseInterruptSession:
+        def __getattr__(self, name: str):
+            return getattr(real_session, name)
+
+        def commit(self) -> None:
+            real_session.commit()
+
+        def close(self) -> None:
+            raise KeyboardInterrupt("close interruption")
+
+    service._sessions = lambda: CloseInterruptSession()
+    try:
+        with pytest.raises(KeyboardInterrupt, match="close interruption"):
+            service.create_user("close-ki", "close-ki-safe-password", "user", set())
+    finally:
+        real_session.close()
+        password_file.write_bytes(original)
+        os.chmod(password_file, 0o600)
+
+
+def test_dual_write_failure_audit_contains_safe_structured_recovery_outcome(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = auth_app.state.user_administration_service
+    original = password_file.read_bytes()
+    real_session = service._sessions()
+
+    class FailingSession:
+        def __getattr__(self, name: str):
+            return getattr(real_session, name)
+
+        def commit(self) -> None:
+            raise RuntimeError("database-original-secret")
+
+        def rollback(self) -> None:
+            raise RuntimeError("rollback-original-secret")
+
+    service._sessions = lambda: FailingSession()
+
+    def fail_compensation(*_args, **_kwargs) -> None:
+        raise PasswordFileOperationError(
+            "compensation-original-secret",
+            "replaced_pending_durability",
+            Path("/private/credential-backup-secret"),
+            (Path("/private/residual-secret"),),
+        )
+
+    def fail_final_sync() -> None:
+        raise RuntimeError("sync-original-secret")
+
+    monkeypatch.setattr(service, "_compensate", fail_compensation)
+    monkeypatch.setattr(service, "_synchronize_final_file", fail_final_sync)
+    try:
+        with caplog.at_level("WARNING", logger="policy_analysis.audit"):
+            response = admin_client.post(
+                "/api/v1/users",
+                json={
+                    "username": "audit-recovery-user",
+                    "password": "audit-password-secret",
+                    "role": "user",
+                    "pages": [],
+                },
+                headers=_csrf(admin_client),
+            )
+        assert response.status_code == 503
+        audit = [record.audit for record in caplog.records if hasattr(record, "audit")][-1]
+        assert audit == {
+            "event": "user_management_failed",
+            "actor": "admin",
+            "action": "create_user",
+            "target": "audit-recovery-user",
+            "request_id": response.headers["X-Request-ID"],
+            "error_code": "USER_ADMINISTRATION_FAILED",
+            "target_state": "replaced_pending_durability",
+            "durability_state": "uncertain",
+            "rollback": "failed",
+            "compensation": "failed",
+            "final_sync": "failed",
+            "close": "succeeded",
+            "consistency": "uncertain",
+        }
+        serialized_logs = caplog.text + repr(audit)
+        for secret in (
+            "audit-password-secret",
+            "database-original-secret",
+            "rollback-original-secret",
+            "compensation-original-secret",
+            "sync-original-secret",
+            "credential-backup-secret",
+            "residual-secret",
+            "$argon2",
+            str(password_file),
+            "Traceback",
+        ):
+            assert secret not in serialized_logs
+    finally:
+        real_session.rollback()
+        real_session.close()
+        password_file.write_bytes(original)
+        os.chmod(password_file, 0o600)
+
+
 def test_admin_read_endpoints_do_not_require_csrf(admin_client: TestClient) -> None:
     assert admin_client.get("/api/v1/users").status_code == 200
     assert admin_client.get("/api/v1/settings/effective").status_code == 200
 
 
-def test_user_list_has_bounded_pagination_and_closed_sorting(
+def test_user_list_uses_exact_page_contract_and_configured_maximum(
     admin_client: TestClient,
+    auth_app: FastAPI,
 ) -> None:
-    for username in ("alpha-user", "zulu-user"):
+    created_ids: list[int] = []
+    for username in ("alpha-user", "middle-user", "zulu-user"):
         response = admin_client.post(
             "/api/v1/users",
             json={
@@ -818,17 +1131,68 @@ def test_user_list_has_bounded_pagination_and_closed_sorting(
             headers=_csrf(admin_client),
         )
         assert response.status_code == 201
+        created_ids.append(response.json()["id"])
+    auth_app.state.settings = type(
+        "SettingsWithPagination",
+        (),
+        {"pagination": type("Pagination", (), {"default_page_size": 2, "max_page_size": 3})()},
+    )()
 
-    response = admin_client.get("/api/v1/users?offset=0&limit=2&sort=username&order=desc")
+    response = admin_client.get("/api/v1/users?page=2&page_size=2&sort_by=id&sort_order=asc")
     payload = response.json()
 
     assert response.status_code == 200
-    assert payload["offset"] == 0
-    assert payload["limit"] == 2
-    assert payload["total"] >= 3
-    assert [item["username"] for item in payload["items"]] == ["zulu-user", "alpha-user"]
-    for query in ("limit=0", "limit=101", "sort=password_hash", "order=random"):
+    assert payload["page"] == 2
+    assert payload["page_size"] == 2
+    assert payload["total"] == 4
+    assert [item["id"] for item in payload["items"]] == created_ids[1:]
+
+    default_size = admin_client.get("/api/v1/users?sort_by=id&sort_order=asc")
+    assert default_size.status_code == 200
+    assert default_size.json()["page_size"] == 2
+    assert len(default_size.json()["items"]) == 2
+
+    for query in (
+        "page=0",
+        "page_size=0",
+        "page_size=4",
+        "sort_by=password_hash",
+        "sort_order=random",
+        "offset=0",
+        "limit=2",
+        "sort=username",
+        "order=asc",
+        "unknown=value",
+    ):
         assert admin_client.get(f"/api/v1/users?{query}").status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("encoded_username", "suffix", "payload"),
+    [
+        ("invalid%3Aname", "password", {"password": "valid-safe-password"}),
+        ("%20admin", "role", {"role": "user"}),
+        ("admin%00", "status", {"is_active": False}),
+        ("x" * 101, "pages", {"pages": []}),
+    ],
+)
+def test_invalid_path_username_returns_422_before_service_or_audit(
+    admin_client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+    encoded_username: str,
+    suffix: str,
+    payload: dict[str, object],
+) -> None:
+    with caplog.at_level("WARNING", logger="policy_analysis.audit"):
+        response = admin_client.patch(
+            f"/api/v1/users/{encoded_username}/{suffix}",
+            json=payload,
+            headers=_csrf(admin_client),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert [record for record in caplog.records if hasattr(record, "audit")] == []
 
 
 @pytest.mark.parametrize(
@@ -887,6 +1251,13 @@ def test_management_failure_writes_safe_structured_audit_record(
             "target": None,
             "request_id": response.headers["X-Request-ID"],
             "error_code": "USER_ADMINISTRATION_FAILED",
+            "target_state": "not_applicable",
+            "durability_state": "not_applicable",
+            "rollback": "not_run",
+            "compensation": "not_run",
+            "final_sync": "not_run",
+            "close": "not_run",
+            "consistency": "uncertain",
         }
     ]
     assert "audit-secret" not in caplog.text

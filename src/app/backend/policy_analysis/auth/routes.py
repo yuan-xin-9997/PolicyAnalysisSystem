@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, model_validator
 
 from policy_analysis.auth.dependencies import (
     get_auth_service,
@@ -21,6 +21,7 @@ from policy_analysis.auth.service import (
     PasswordSyncError,
     PublicUser,
     UserAdministrationError,
+    UserAdministrationOutcome,
     UserAdministrationService,
 )
 from policy_analysis.core.errors import APIError
@@ -115,6 +116,21 @@ class ChangePagesRequest(BaseModel):
     pages: set[PageCode]
 
 
+def _validate_path_username(value: str) -> str:
+    try:
+        validate_password_entry(value, "request-validation-password", "user")
+    except ValueError:
+        raise ValueError("用户名不符合凭据文件语法") from None
+    return value
+
+
+UsernamePath = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=100),
+    AfterValidator(_validate_path_username),
+]
+
+
 def get_user_administration_service(request: Request) -> UserAdministrationService:
     return request.app.state.user_administration_service
 
@@ -122,29 +138,38 @@ def get_user_administration_service(request: Request) -> UserAdministrationServi
 @users_router.get("")
 def list_users(
     request: Request,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=100),
-    sort: Literal["username", "role", "is_active"] = "username",
-    order: Literal["asc", "desc"] = "asc",
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1),
+    sort_by: Literal["id", "username", "role", "is_active"] = "username",
+    sort_order: Literal["asc", "desc"] = "asc",
     _admin: PublicUser = Depends(require_admin),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
+    allowed_query = {"page", "page_size", "sort_by", "sort_order"}
+    if set(request.query_params) - allowed_query:
+        raise APIError(status_code=422, code="VALIDATION_ERROR", message="请求参数无效。")
+    pagination = request.app.state.settings.pagination
+    effective_page_size = page_size or pagination.default_page_size
+    if effective_page_size > pagination.max_page_size:
+        raise APIError(status_code=422, code="VALIDATION_ERROR", message="请求参数无效。")
     users, total = _admin_call(
         service.list_users,
         request=request,
         actor=_admin,
         action="list_users",
         target=None,
-        offset=offset,
-        limit=limit,
-        sort=sort,
-        descending=order == "desc",
+        page=page,
+        page_size=effective_page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     return {
         "items": [user.to_dict() for user in users],
         "total": total,
-        "offset": offset,
-        "limit": limit,
+        "page": page,
+        "page_size": effective_page_size,
+        "sort_by": sort_by,
+        "sort_order": sort_order,
     }
 
 
@@ -170,7 +195,7 @@ def create_user(
 
 @users_router.patch("/{username}/password")
 def change_password(
-    username: str,
+    username: UsernamePath,
     payload: ChangePasswordRequest,
     request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
@@ -189,7 +214,7 @@ def change_password(
 
 @users_router.patch("/{username}/role")
 def change_role(
-    username: str,
+    username: UsernamePath,
     payload: ChangeRoleRequest,
     request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
@@ -208,7 +233,7 @@ def change_role(
 
 @users_router.patch("/{username}/status")
 def change_status(
-    username: str,
+    username: UsernamePath,
     payload: ChangeStatusRequest,
     request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
@@ -227,7 +252,7 @@ def change_status(
 
 @users_router.patch("/{username}/pages")
 def change_pages(
-    username: str,
+    username: UsernamePath,
     payload: ChangePagesRequest,
     request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
@@ -256,10 +281,38 @@ def _admin_call(
     try:
         return operation(*args, **kwargs)
     except APIError as error:
-        _audit_failure(request, actor, action, target, error.code)
+        _audit_failure(
+            request,
+            actor,
+            action,
+            target,
+            error.code,
+            UserAdministrationOutcome.not_applicable(),
+        )
         raise
-    except (PasswordFileError, PasswordSyncError, UserAdministrationError):
-        _audit_failure(request, actor, action, target, "USER_ADMINISTRATION_FAILED")
+    except UserAdministrationError as error:
+        _audit_failure(
+            request,
+            actor,
+            action,
+            target,
+            "USER_ADMINISTRATION_FAILED",
+            error.outcome,
+        )
+        raise APIError(
+            status_code=503,
+            code="USER_ADMINISTRATION_FAILED",
+            message="用户管理服务暂时不可用。",
+        ) from None
+    except (PasswordFileError, PasswordSyncError):
+        _audit_failure(
+            request,
+            actor,
+            action,
+            target,
+            "USER_ADMINISTRATION_FAILED",
+            UserAdministrationOutcome.not_applicable(consistency="uncertain"),
+        )
         raise APIError(
             status_code=503,
             code="USER_ADMINISTRATION_FAILED",
@@ -273,6 +326,7 @@ def _audit_failure(
     action: str,
     target: str | None,
     error_code: str,
+    outcome: UserAdministrationOutcome,
 ) -> None:
     audit_logger.warning(
         "user_management_failed",
@@ -284,6 +338,7 @@ def _audit_failure(
                 "target": target,
                 "request_id": request.state.request_id,
                 "error_code": error_code,
+                **outcome.to_audit_dict(),
             }
         },
     )

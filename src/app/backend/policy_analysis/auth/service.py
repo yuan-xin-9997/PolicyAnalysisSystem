@@ -18,7 +18,7 @@ from threading import Lock
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
@@ -138,25 +138,28 @@ class UserSyncService:
                 )
                 continue
 
-            password_changed = self._password_needs_rehash(user, entry.password)
+            password_needs_update, credential_changed = self._password_state(user, entry.password)
             role_changed = user.role != entry.role
             reactivated = (
                 not user.is_active
                 and self._last_usernames is not None
                 and entry.username not in self._last_usernames
             )
-            if password_changed:
+            if password_needs_update:
                 user.password_hash = self._password_hasher.hash(entry.password)
+            if credential_changed:
+                repository.revoke_sessions(user.id)
             if role_changed:
                 user.role = entry.role
             if reactivated:
                 user.is_active = True
-            if password_changed or role_changed or reactivated:
+            if password_needs_update or role_changed or reactivated:
                 user.password_synced_at = synchronized_at
 
         for user in repository.list_users():
             if user.username not in entries_by_username:
                 user.is_active = False
+                repository.revoke_sessions(user.id)
 
     def record_managed_snapshot(self, entries: list[PasswordEntry]) -> None:
         """Record a file version already committed by the administration service."""
@@ -164,12 +167,12 @@ class UserSyncService:
         self._last_fingerprint = fingerprint
         self._last_usernames = {entry.username for entry in entries}
 
-    def _password_needs_rehash(self, user: User, supplied_password: str) -> bool:
+    def _password_state(self, user: User, supplied_password: str) -> tuple[bool, bool]:
         try:
             self._password_hasher.verify(user.password_hash, supplied_password)
-            return self._password_hasher.check_needs_rehash(user.password_hash)
+            return self._password_hasher.check_needs_rehash(user.password_hash), False
         except (InvalidHashError, VerificationError):
-            return True
+            return True, True
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,6 +472,50 @@ class ManagedUser:
 class UserAdministrationError(RuntimeError):
     """Safe domain failure for a compensated user administration operation."""
 
+    def __init__(
+        self,
+        message: str,
+        outcome: UserAdministrationOutcome | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = outcome or UserAdministrationOutcome.not_applicable(consistency="uncertain")
+
+
+@dataclass(frozen=True, slots=True)
+class UserAdministrationOutcome:
+    """Secret-free recovery facts safe for operational audit logging."""
+
+    target_state: str
+    durability_state: str
+    rollback: str
+    compensation: str
+    final_sync: str
+    close: str
+    consistency: str
+
+    @classmethod
+    def not_applicable(cls, *, consistency: str = "reconciled") -> UserAdministrationOutcome:
+        return cls(
+            target_state="not_applicable",
+            durability_state="not_applicable",
+            rollback="not_run",
+            compensation="not_run",
+            final_sync="not_run",
+            close="not_run",
+            consistency=consistency,
+        )
+
+    def to_audit_dict(self) -> dict[str, str]:
+        return {
+            "target_state": self.target_state,
+            "durability_state": self.durability_state,
+            "rollback": self.rollback,
+            "compensation": self.compensation,
+            "final_sync": self.final_sync,
+            "close": self.close,
+            "consistency": self.consistency,
+        }
+
 
 class UserAdministrationService:
     """Keep password.txt authoritative while applying matching database changes."""
@@ -488,27 +535,28 @@ class UserAdministrationService:
     def list_users(
         self,
         *,
-        offset: int = 0,
-        limit: int = 50,
-        sort: str = "username",
-        descending: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+        sort_by: str = "username",
+        sort_order: str = "asc",
     ) -> tuple[list[ManagedUser], int]:
         with self._user_sync.file_lock:
             self._user_sync._sync_if_changed_locked()
             with self._sessions() as database:
                 sort_column = {
+                    "id": User.id,
                     "username": User.username,
                     "role": User.role,
                     "is_active": User.is_active,
-                }[sort]
-                ordering = sort_column.desc() if descending else sort_column.asc()
+                }[sort_by]
+                ordering = sort_column.desc() if sort_order == "desc" else sort_column.asc()
                 total = database.scalar(select(func.count(User.id))) or 0
                 users = database.scalars(
                     select(User)
                     .options(joinedload(User.page_permissions))
                     .order_by(ordering, User.username.asc())
-                    .offset(offset)
-                    .limit(limit)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
                 ).unique()
                 return [_managed_user(user) for user in users], total
 
@@ -534,7 +582,7 @@ class UserAdministrationService:
             user.password_synced_at = datetime.now(UTC)
             database.flush()
             _replace_permissions(user, pages)
-            _revoke_user_sessions(database, user.id)
+            UserRepository(database).revoke_sessions(user.id)
             return [*entries, PasswordEntry(username, password, role)], user
 
         return self._update(mutate)
@@ -551,7 +599,7 @@ class UserAdministrationService:
                 raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
             user.password_hash = self._password_hasher.hash(password)
             user.password_synced_at = datetime.now(UTC)
-            _revoke_user_sessions(database, user.id)
+            UserRepository(database).revoke_sessions(user.id)
             return updated, user
 
         return self._update(mutate)
@@ -591,7 +639,7 @@ class UserAdministrationService:
                     _ensure_admin_remains(database, user, next_active=is_active)
                     user.is_active = is_active
                     if not is_active:
-                        _revoke_user_sessions(database, user.id)
+                        UserRepository(database).revoke_sessions(user.id)
                     database.flush()
                     result = _managed_user(user)
             except APIError:
@@ -642,28 +690,52 @@ class UserAdministrationService:
                 self._user_sync.record_managed_snapshot(updated_entries)
             except BaseException as error:
                 failure = error
+            recovery_errors: list[BaseException] = []
+            rollback_state = "not_run"
+            compensation_state = "not_run"
+            final_sync_state = "not_run"
+            needs_recovery = failure is not None and (
+                file_replaced or _file_contains_attempted_update(failure)
+            )
             if failure is not None:
-                _ignore_cleanup_failure(database.rollback)
-                if file_replaced or _file_contains_attempted_update(failure):
-                    _ignore_cleanup_failure(
-                        lambda: self._compensate(
-                            original_contents,
-                            original_entries,
-                            updated_entries,
-                        )
+                recovery_errors.append(failure)
+                rollback_state = _run_recovery_stage(database.rollback, recovery_errors)
+                if needs_recovery:
+                    compensation_state = _run_recovery_stage(
+                        lambda: self._compensate(original_contents, original_entries),
+                        recovery_errors,
                     )
-                _ignore_cleanup_failure(self._synchronize_final_file)
-            close_failure = _capture_cleanup_failure(database.close)
-            if failure is None and close_failure is None:
+                    final_sync_state = _run_recovery_stage(
+                        self._synchronize_final_file,
+                        recovery_errors,
+                    )
+            close_state = _run_recovery_stage(database.close, recovery_errors)
+            if failure is None and close_state == "succeeded":
                 if result is None:
                     raise AssertionError("用户管理操作未返回结果")
                 return result
-            if isinstance(failure, APIError):
+            outcome = _build_administration_outcome(
+                errors=recovery_errors,
+                file_replaced=file_replaced,
+                operation_succeeded=failure is None,
+                rollback=rollback_state,
+                compensation=compensation_state,
+                final_sync=final_sync_state,
+                close=close_state,
+            )
+            system_failures = _system_failures(recovery_errors)
+            if len(system_failures) == 1:
+                raise system_failures[0]
+            if system_failures:
+                raise BaseExceptionGroup("用户管理操作被系统级异常中断", system_failures)
+            cleanup_failed = any(
+                state == "failed"
+                for state in (rollback_state, compensation_state, final_sync_state, close_state)
+            )
+            if isinstance(failure, APIError) and not cleanup_failed:
                 raise failure
-            if failure is not None and not isinstance(failure, Exception):
-                raise failure
-            if failure is not None or close_failure is not None:
-                raise UserAdministrationError("用户管理操作失败") from None
+            if failure is not None or close_state == "failed":
+                raise UserAdministrationError("用户管理操作失败", outcome) from None
             raise AssertionError("用户管理操作未返回结果")
 
     def _read_entries_locked(self) -> tuple[bytes, list[PasswordEntry]]:
@@ -680,25 +752,13 @@ class UserAdministrationService:
         self,
         original_contents: bytes,
         original_entries: list[PasswordEntry],
-        attempted_entries: list[PasswordEntry],
-    ) -> list[PasswordEntry]:
-        try:
-            replace_password_file_contents(self._password_file, original_contents)
-            self._user_sync.record_managed_snapshot(original_entries)
-            return original_entries
-        except BaseException as compensation_error:
-            if _file_contains_attempted_update(compensation_error):
-                return original_entries
-            if _file_restored_previous(compensation_error):
-                return attempted_entries
-            return attempted_entries
+    ) -> None:
+        replace_password_file_contents(self._password_file, original_contents)
+        self._user_sync.record_managed_snapshot(original_entries)
 
     def _synchronize_final_file(self) -> None:
         self._user_sync._last_fingerprint = None
-        try:
-            self._user_sync._sync_if_changed_locked()
-        except Exception:
-            return
+        self._user_sync._sync_if_changed_locked()
 
 
 def _find_user(database: Session, username: str) -> User:
@@ -708,10 +768,6 @@ def _find_user(database: Session, username: str) -> User:
     if user is None:
         raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
     return user
-
-
-def _revoke_user_sessions(database: Session, user_id: int) -> None:
-    database.execute(delete(SessionRecord).where(SessionRecord.user_id == user_id))
 
 
 def _ensure_admin_remains(
@@ -739,16 +795,84 @@ def _ensure_admin_remains(
         )
 
 
-def _ignore_cleanup_failure(operation: Callable[[], object]) -> None:
-    _capture_cleanup_failure(operation)
-
-
-def _capture_cleanup_failure(operation: Callable[[], object]) -> BaseException | None:
+def _run_recovery_stage(
+    operation: Callable[[], object],
+    errors: list[BaseException],
+) -> str:
     try:
         operation()
     except BaseException as error:
-        return error
-    return None
+        errors.append(error)
+        return "failed"
+    return "succeeded"
+
+
+def _system_failures(errors: list[BaseException]) -> list[BaseException]:
+    system_errors: list[BaseException] = []
+
+    def collect(error: BaseException) -> None:
+        if isinstance(error, BaseExceptionGroup):
+            for nested in error.exceptions:
+                collect(nested)
+        elif not isinstance(error, Exception):
+            system_errors.append(error)
+
+    for error in errors:
+        collect(error)
+    return system_errors
+
+
+def _build_administration_outcome(
+    *,
+    errors: list[BaseException],
+    file_replaced: bool,
+    operation_succeeded: bool,
+    rollback: str,
+    compensation: str,
+    final_sync: str,
+    close: str,
+) -> UserAdministrationOutcome:
+    operation_errors = [item for error in errors for item in _operation_errors(error)]
+    target_states = {error.target_state for error in operation_errors}
+    durability_states = {error.durability_state for error in operation_errors}
+    if len(target_states) == 1:
+        target_state = target_states.pop()
+    elif target_states:
+        target_state = "unknown"
+    elif operation_succeeded and file_replaced:
+        target_state = "persisted"
+    elif compensation == "succeeded":
+        target_state = "restored"
+    elif file_replaced:
+        target_state = "unknown"
+    else:
+        target_state = "not_applicable"
+    if len(durability_states) == 1:
+        durability_state = durability_states.pop()
+    elif durability_states:
+        durability_state = "unknown"
+    elif target_state in {"persisted", "restored", "not_replaced"}:
+        durability_state = "durable"
+    elif target_state == "not_applicable":
+        durability_state = "not_applicable"
+    else:
+        durability_state = "unknown"
+    consistency = (
+        "reconciled"
+        if operation_succeeded
+        or final_sync == "succeeded"
+        or (rollback == "succeeded" and compensation == "succeeded")
+        else "uncertain"
+    )
+    return UserAdministrationOutcome(
+        target_state=target_state,
+        durability_state=durability_state,
+        rollback=rollback,
+        compensation=compensation,
+        final_sync=final_sync,
+        close=close,
+        consistency=consistency,
+    )
 
 
 def _replace_permissions(user: User, pages: set[str]) -> None:
@@ -778,6 +902,18 @@ def _operation_states(error: BaseException) -> set[str]:
         if isinstance(current, BaseExceptionGroup):
             pending.extend(current.exceptions)
     return states
+
+
+def _operation_errors(error: BaseException) -> tuple[PasswordFileOperationError, ...]:
+    result: list[PasswordFileOperationError] = []
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, PasswordFileOperationError):
+            result.append(current)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+    return tuple(result)
 
 
 def _file_contains_attempted_update(error: BaseException) -> bool:
