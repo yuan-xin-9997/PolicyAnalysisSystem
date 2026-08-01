@@ -1,58 +1,67 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from policy_analysis.auth.models import User
+from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.permissions import all_page_codes
-from policy_analysis.core.settings import load_settings_snapshot
+from policy_analysis.main import create_app
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
 
 
 def test_platform_authentication_and_permissions_smoke_flow(
-    auth_app: FastAPI,
     client_context: Callable[..., AbstractContextManager[TestClient]],
-    database_sessions: sessionmaker[Session],
-    password_file: Path,
     project_root: Path,
 ) -> None:
     administrator_password = "admin123"
     password_contents = f"admin:{administrator_password}:admin\n"
     test_api_key = "test-webfetch-key-must-not-leak"
     test_session_secret = "test-session-secret-must-not-leak"
+    runtime_directory = project_root / "runtime"
+    runtime_directory.mkdir()
+    password_file = runtime_directory / "password.txt"
     password_file.write_text(password_contents, encoding="utf-8")
+    os.chmod(password_file, 0o600)
 
-    config_path = project_root / "app.json"
+    config_path = project_root / "config" / "app.json"
+    config_path.parent.mkdir()
     config_path.write_text(
         json.dumps(
             {
                 "server": {"port": 30080},
-                "database": {"path": "app.sqlite3"},
-                "auth": {"password_file": "password.txt"},
+                "database": {"path": "runtime/app.sqlite3"},
+                "auth": {"password_file": "runtime/password.txt"},
                 "webfetch": {"base_url": "https://fetch.example.invalid"},
             }
         ),
         encoding="utf-8",
     )
-    snapshot = load_settings_snapshot(
-        config_path,
-        project_root,
-        {
-            "POLICY_ANALYSIS_AUTH__SESSION_SECRET": test_session_secret,
-            "POLICY_ANALYSIS_WEBFETCH__API_KEY": test_api_key,
-        },
+    environment = {
+        "POLICY_ANALYSIS_VERSION": "v0.smoke",
+        "POLICY_ANALYSIS_COMMIT_SHA": "123456789abcdef",
+        "POLICY_ANALYSIS_AUTH__SESSION_SECRET": test_session_secret,
+        "POLICY_ANALYSIS_WEBFETCH__API_KEY": test_api_key,
+    }
+    app = create_app(
+        project_root=project_root,
+        config_path=Path("config/app.json"),
+        environment=environment,
     )
-    assert snapshot.settings.database.path == project_root / "app.sqlite3"
-    assert snapshot.settings.auth.password_file == password_file
 
-    with client_context(auth_app) as client:
-        auth_app.state.settings = snapshot.settings
-        auth_app.state.settings_sources = snapshot.sources
+    assert app.state.project_root == project_root.resolve()
+    assert app.state.settings_config_path == config_path.resolve()
+    assert app.state.version_environment == environment
+
+    with client_context(app) as client:
+        assert app.state.settings.database.path == runtime_directory / "app.sqlite3"
+        assert app.state.settings.auth.password_file == password_file
+        assert app.state.settings_environment == environment
 
         login = client.post(
             "/api/v1/auth/login",
@@ -84,9 +93,12 @@ def test_platform_authentication_and_permissions_smoke_flow(
         system_info = client.get("/api/v1/system/info")
         assert system_info.status_code == 200
         system_payload = system_info.json()
-        assert system_payload["version"]
-        assert len(system_payload["commit_sha"]) == 7
+        assert system_payload["version"] == "v0.smoke"
+        assert system_payload["commit_sha"] == "1234567"
         assert system_payload["timezone"] == "Asia/Shanghai"
+        server_time = datetime.fromisoformat(system_payload["server_time"])
+        assert server_time.tzinfo is not None
+        assert server_time.utcoffset() == timedelta(hours=8)
         assert system_payload["health"] == {
             "live": "ok",
             "database": "ok",
@@ -109,20 +121,28 @@ def test_platform_authentication_and_permissions_smoke_flow(
         }
         assert settings_payload["webfetch"] == {"status": "configured", "checked": False}
 
-        with database_sessions() as database:
+        token_hash = hashlib.sha256(session_token.encode()).hexdigest()
+        with app.state.database_sessions() as database:
             administrator = database.scalar(select(User).where(User.username == "admin"))
             assert administrator is not None
             password_hash = administrator.password_hash
             assert password_hash.startswith("$argon2")
+            session = database.scalar(select(SessionRecord).where(SessionRecord.token_hash == token_hash))
+            assert session is not None
+            session_id = session.id
 
         logout = client.post(
             "/api/v1/auth/logout",
             headers={"X-CSRF-Token": csrf_token},
         )
         assert logout.status_code == 204
-        logged_out_me = client.get("/api/v1/auth/me")
-        assert logged_out_me.status_code == 401
-        assert logged_out_me.json()["error"]["code"] == "SESSION_INVALID"
+        with app.state.database_sessions() as database:
+            assert database.get(SessionRecord, session_id) is None
+
+        client.cookies.set("session", session_token, path="/")
+        replayed_session = client.get("/api/v1/auth/me")
+        assert replayed_session.status_code == 401
+        assert replayed_session.json()["error"]["code"] == "SESSION_INVALID"
 
         login_for_leak_check = dict(login_payload)
         login_for_leak_check["csrf_token"] = "<allowed-login-field>"
@@ -133,7 +153,7 @@ def test_platform_authentication_and_permissions_smoke_flow(
                 system_payload,
                 settings_payload,
                 logout.text,
-                logged_out_me.json(),
+                replayed_session.json(),
             ],
             ensure_ascii=False,
         )
@@ -144,6 +164,9 @@ def test_platform_authentication_and_permissions_smoke_flow(
             test_api_key,
             test_session_secret,
             session_token,
+            token_hash,
             csrf_token,
         ):
             assert secret not in response_bodies
+
+    assert (runtime_directory / "app.sqlite3").is_file()

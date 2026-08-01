@@ -19,6 +19,53 @@ def test_create_app_returns_fastapi() -> None:
     assert app.title == "政策分析系统"
 
 
+def test_create_app_explicit_empty_environment_and_default_frontend_use_injected_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POLICY_ANALYSIS_SERVER__PORT", "39999")
+    config_path = tmp_path / "config" / "app.json"
+    config_path.parent.mkdir()
+    config_path.write_text("{}", encoding="utf-8")
+    password_file = tmp_path / "src" / "data" / "password.txt"
+    password_file.parent.mkdir(parents=True)
+    password_file.write_text("", encoding="utf-8")
+    password_file.chmod(0o600)
+    frontend_dist = tmp_path / "src" / "app" / "frontend" / "dist"
+    frontend_dist.mkdir(parents=True)
+    (frontend_dist / "index.html").write_text("<html>injected root</html>", encoding="utf-8")
+
+    app = create_app(
+        project_root=tmp_path,
+        config_path=Path("config/app.json"),
+        environment={},
+    )
+
+    assert app.state.project_root == tmp_path.resolve()
+    assert app.state.settings_config_path == config_path.resolve()
+    assert app.state.frontend_dist == frontend_dist.resolve()
+    assert app.state.version_environment == {}
+    with _test_client(app) as client:
+        assert app.state.settings.server.port == 30080
+        assert app.state.settings_environment == {}
+        response = client.get("/login")
+        assert response.status_code == 200
+        assert response.text == "<html>injected root</html>"
+
+
+@pytest.mark.parametrize("path_argument", ["config_path", "frontend_dist"])
+def test_create_app_rejects_relative_factory_paths_that_escape_injected_root(
+    tmp_path: Path,
+    path_argument: str,
+) -> None:
+    with pytest.raises(ValueError, match="相对路径必须位于 project_root"):
+        create_app(
+            project_root=tmp_path,
+            environment={},
+            **{path_argument: Path("../outside")},
+        )
+
+
 class DisposableEngine:
     def __init__(self) -> None:
         self.dispose_calls = 0

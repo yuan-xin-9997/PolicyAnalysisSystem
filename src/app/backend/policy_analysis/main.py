@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import unquote
@@ -24,22 +25,43 @@ from policy_analysis.system.routes import router as system_router
 def create_app(
     auth_service: AuthService | None = None,
     frontend_dist: Path | None = None,
+    *,
+    project_root: Path | None = None,
+    config_path: Path | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> FastAPI:
-    project_root = Path(__file__).resolve().parents[4]
-    environment = dict(os.environ)
-    config_path = project_root / "src/config/app.json"
-    resolved_frontend_dist = frontend_dist or project_root / "src/app/frontend/dist"
+    resolved_project_root = (
+        Path(__file__).resolve().parents[4] if project_root is None else Path(project_root).resolve()
+    )
+    resolved_environment = dict(os.environ) if environment is None else dict(environment)
+    resolved_config_path = _resolve_factory_path(
+        resolved_project_root,
+        config_path,
+        default=Path("src/config/app.json"),
+    )
+    resolved_frontend_dist = _resolve_factory_path(
+        resolved_project_root,
+        frontend_dist,
+        default=Path("src/app/frontend/dist"),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         engine: Engine | None = None
         owns_runtime = app.state.auth_service is None
         try:
-            snapshot = load_settings_snapshot(config_path, project_root, environment)
+            snapshot = load_settings_snapshot(
+                resolved_config_path,
+                resolved_project_root,
+                resolved_environment,
+            )
             app.state.settings = snapshot.settings
             app.state.settings_sources = snapshot.sources
-            app.state.settings_environment = environment
-            app.state.build_metadata = resolve_build_metadata(environment, project_root)
+            app.state.settings_environment = resolved_environment
+            app.state.build_metadata = resolve_build_metadata(
+                resolved_environment,
+                resolved_project_root,
+            )
             if owns_runtime:
                 default_service, engine = _build_default_auth_service(snapshot.settings)
                 app.state.auth_service = default_service
@@ -67,12 +89,13 @@ def create_app(
     app.state.database_sessions = auth_service.sessions if isinstance(auth_service, AuthService) else None
     app.state.user_administration_service = None
     app.state.settings = None
-    app.state.settings_config_path = config_path
+    app.state.settings_config_path = resolved_config_path
     app.state.settings_environment = None
     app.state.settings_sources = None
-    app.state.version_environment = environment
+    app.state.version_environment = resolved_environment
     app.state.build_metadata = None
-    app.state.project_root = project_root
+    app.state.project_root = resolved_project_root
+    app.state.frontend_dist = resolved_frontend_dist
     install_error_handlers(app)
     app.include_router(auth_router)
     app.include_router(users_router)
@@ -81,6 +104,16 @@ def create_app(
     app.include_router(health_router)
     _install_spa_routes(app, resolved_frontend_dist)
     return app
+
+
+def _resolve_factory_path(project_root: Path, value: Path | None, *, default: Path) -> Path:
+    path = default if value is None else Path(value)
+    if path.is_absolute():
+        return path.resolve()
+    resolved = (project_root / path).resolve()
+    if not resolved.is_relative_to(project_root):
+        raise ValueError("应用工厂相对路径必须位于 project_root 内")
+    return resolved
 
 
 def _install_spa_routes(app: FastAPI, frontend_dist: Path) -> None:
