@@ -5,16 +5,20 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from policy_analysis.auth.models import User
-from policy_analysis.core.database import build_engine
+from policy_analysis.auth import models as auth_models
+from policy_analysis.core.database import Base, build_engine
 from policy_analysis.core.settings import load_settings
+from policy_analysis.policies import models as policy_models
+from policy_analysis.sources import models as source_models
+from policy_analysis.tasks import models as task_models
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = User.metadata
+del auth_models, policy_models, source_models, task_models
+target_metadata = Base.metadata
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

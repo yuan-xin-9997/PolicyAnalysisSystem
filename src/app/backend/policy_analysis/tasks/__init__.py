@@ -1,0 +1,1 @@
+"""Persistent collection task domain."""
