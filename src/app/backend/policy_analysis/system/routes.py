@@ -25,10 +25,7 @@ def system_info(
     request: Request,
     _user: PublicUser = Depends(require_user),
 ) -> dict[str, object]:
-    version, commit_sha = resolve_build_metadata(
-        request.app.state.version_environment,
-        request.app.state.project_root,
-    )
+    version, commit_sha = request.app.state.build_metadata
     database_status = _database_status(request)
     return {
         "version": version,

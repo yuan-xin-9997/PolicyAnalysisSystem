@@ -35,6 +35,12 @@ def require_admin_csrf(
     return session.user
 
 
+def require_admin(current_user: PublicUser = Depends(require_user)) -> PublicUser:
+    if current_user.role != "admin":
+        raise _permission_denied()
+    return current_user
+
+
 def require_page(required: PageCode) -> Callable[..., PublicUser]:
     def dependency(current_user: PublicUser = Depends(require_user)) -> PublicUser:
         if not can_access(current_user.role, set(current_user.page_permissions), required):

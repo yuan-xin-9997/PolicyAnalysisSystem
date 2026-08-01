@@ -12,10 +12,7 @@ def test_system_info_uses_injected_build_metadata_and_beijing_time(
     admin_client: TestClient,
     auth_app,
 ) -> None:
-    auth_app.state.version_environment = {
-        "POLICY_ANALYSIS_VERSION": "v0.456",
-        "POLICY_ANALYSIS_COMMIT_SHA": "abcdef1234567890",
-    }
+    auth_app.state.build_metadata = ("v0.456", "abcdef1")
 
     response = admin_client.get("/api/v1/system/info")
 
@@ -107,3 +104,34 @@ def test_build_metadata_has_explicit_fallback_when_git_is_unavailable(
     )
 
     assert resolve_build_metadata({}, tmp_path) == ("v0.dev", "unknown")
+
+
+def test_repeated_system_info_requests_use_one_cached_git_resolution(
+    auth_app_factory,
+    client_context,
+    password_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def git_output(_root: Path, *arguments: str) -> str:
+        calls.append(arguments)
+        return "42" if "rev-list" in arguments else "abcdef1"
+
+    monkeypatch.setattr(system_routes, "_git_output", git_output)
+    app = auth_app_factory()
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+
+    with client_context(app) as client:
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert login.status_code == 200
+        first = client.get("/api/v1/system/info")
+        second = client.get("/api/v1/system/info")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["version"] == second.json()["version"] == "v0.42"
+    assert first.json()["commit_sha"] == second.json()["commit_sha"] == "abcdef1"
+    assert calls == [("rev-list", "--count", "HEAD"), ("rev-parse", "--short=7", "HEAD")]

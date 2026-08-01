@@ -116,3 +116,22 @@ def test_build_metadata_environment_does_not_pollute_application_settings_source
     assert settings.server.port == 30080
     assert "version" not in sources
     assert "commit_sha" not in sources
+
+
+def test_top_level_json_environment_object_marks_each_effective_leaf_as_environment(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "app.json"
+    config.write_text("{}", encoding="utf-8")
+    environment = {
+        "POLICY_ANALYSIS_SERVER": '{"host":"0.0.0.0","port":31001}',
+    }
+
+    settings = load_settings(config, tmp_path, environment)
+    sources = settings_sources(config, environment)
+
+    assert settings.server.host == "0.0.0.0"
+    assert settings.server.port == 31001
+    assert sources["server.host"] == "environment"
+    assert sources["server.port"] == "environment"
+    assert "server" not in sources

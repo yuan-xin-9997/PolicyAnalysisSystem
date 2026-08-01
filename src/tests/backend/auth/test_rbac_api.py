@@ -8,9 +8,9 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from policy_analysis.auth.models import User
+from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.password_file import (
     PasswordFileOperationError,
     parse_password_text,
@@ -429,6 +429,18 @@ def test_database_failure_rolls_back_status_and_page_updates(
     suffix: str,
     payload: dict[str, object],
 ) -> None:
+    if suffix == "status":
+        backup = admin_client.post(
+            "/api/v1/users",
+            json={
+                "username": "commit-failure-backup-admin",
+                "password": "backup-admin-safe-password",
+                "role": "admin",
+                "pages": [],
+            },
+            headers=_csrf(admin_client),
+        )
+        assert backup.status_code == 201
     session_class = database_sessions.class_
     real_commit = session_class.commit
     commit_calls = 0
@@ -508,7 +520,7 @@ def test_administrative_deactivation_survives_a_new_sync_service(
         assert user.is_active is False
 
 
-def test_user_list_returns_unified_safe_error_when_password_source_is_invalid(
+def test_user_list_fails_closed_during_authorization_when_password_source_is_invalid(
     admin_client: TestClient,
     password_file: Path,
 ) -> None:
@@ -520,7 +532,7 @@ def test_user_list_returns_unified_safe_error_when_password_source_is_invalid(
     response = admin_client.get("/api/v1/users", headers=_csrf(admin_client))
 
     assert response.status_code == 503
-    assert response.json()["error"]["code"] == "USER_ADMINISTRATION_FAILED"
+    assert response.json()["error"]["code"] == "AUTH_SYNC_FAILED"
     assert "credential-source-secret" not in response.text
     assert str(password_file) not in response.text
 
@@ -549,3 +561,370 @@ def test_administration_failure_exception_chain_does_not_retain_database_or_pass
     assert error.__context__ is None
     assert secret not in str(error)
     assert secret not in repr(vars(error))
+
+
+def test_existing_admin_session_is_downgraded_before_first_read_or_write_authorization(
+    admin_client: TestClient,
+    password_file: Path,
+) -> None:
+    password_file.write_text("admin:admin123:user\n", encoding="utf-8")
+
+    settings = admin_client.get("/api/v1/settings/effective", headers=_csrf(admin_client))
+    create = admin_client.post(
+        "/api/v1/users",
+        json={
+            "username": "must-not-be-created",
+            "password": "safe-password-value",
+            "role": "user",
+            "pages": [],
+        },
+        headers=_csrf(admin_client),
+    )
+
+    assert settings.status_code == 403
+    assert create.status_code == 403
+    assert "must-not-be-created" not in password_file.read_text(encoding="utf-8")
+
+
+def test_session_authentication_fails_closed_when_password_sync_fails(
+    admin_client: TestClient,
+    password_file: Path,
+) -> None:
+    password_file.write_text("admin:secret-value:invalid-role\n", encoding="utf-8")
+
+    response = admin_client.get("/api/v1/system/info")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "AUTH_SYNC_FAILED"
+    assert "secret-value" not in response.text
+
+
+def test_recreating_a_password_file_tombstone_reuses_the_database_identity(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    payload = {
+        "username": "restored-user",
+        "password": "initial-safe-password",
+        "role": "user",
+        "pages": ["policies"],
+    }
+    created = admin_client.post("/api/v1/users", json=payload, headers=_csrf(admin_client))
+    original_id = created.json()["id"]
+    entries = [
+        entry
+        for entry in parse_password_text(password_file.read_text(encoding="utf-8"))
+        if entry.username != "restored-user"
+    ]
+    from policy_analysis.auth.password_file import replace_password_file
+
+    replace_password_file(password_file, entries)
+    auth_app.state.auth_service.user_sync.sync_if_changed()
+
+    recreated = admin_client.post(
+        "/api/v1/users",
+        json={**payload, "password": "replacement-safe-password", "pages": ["tasks"]},
+        headers=_csrf(admin_client),
+    )
+
+    assert recreated.status_code == 201
+    assert recreated.json()["id"] == original_id
+    assert recreated.json()["is_active"] is True
+    assert recreated.json()["pages"] == ["tasks"]
+    with database_sessions() as database:
+        users = list(database.scalars(select(User).where(User.username == "restored-user")))
+        assert len(users) == 1
+
+
+def test_password_reset_and_deactivation_revoke_all_target_sessions(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    database_sessions: sessionmaker[Session],
+) -> None:
+    created = admin_client.post(
+        "/api/v1/users",
+        json={
+            "username": "revoked-user",
+            "password": "initial-safe-password",
+            "role": "user",
+            "pages": [],
+        },
+        headers=_csrf(admin_client),
+    )
+    assert created.status_code == 201
+
+    with client_context(auth_app) as target_client:
+        assert (
+            target_client.post(
+                "/api/v1/auth/login",
+                json={"username": "revoked-user", "password": "initial-safe-password"},
+            ).status_code
+            == 200
+        )
+        changed = admin_client.patch(
+            "/api/v1/users/revoked-user/password",
+            json={"password": "replacement-safe-password"},
+            headers=_csrf(admin_client),
+        )
+        assert changed.status_code == 200
+        assert target_client.get("/api/v1/auth/me").status_code == 401
+
+        assert (
+            target_client.post(
+                "/api/v1/auth/login",
+                json={"username": "revoked-user", "password": "replacement-safe-password"},
+            ).status_code
+            == 200
+        )
+        disabled = admin_client.patch(
+            "/api/v1/users/revoked-user/status",
+            json={"is_active": False},
+            headers=_csrf(admin_client),
+        )
+        assert disabled.status_code == 200
+        assert target_client.get("/api/v1/auth/me").status_code == 401
+
+    with database_sessions() as database:
+        user = database.scalar(select(User).where(User.username == "revoked-user"))
+        assert user is not None
+        assert list(database.scalars(select(SessionRecord).where(SessionRecord.user_id == user.id))) == []
+
+
+@pytest.mark.parametrize(
+    ("suffix", "payload"),
+    [("role", {"role": "user"}), ("status", {"is_active": False})],
+)
+def test_last_active_admin_cannot_be_demoted_or_deactivated(
+    admin_client: TestClient,
+    suffix: str,
+    payload: dict[str, object],
+) -> None:
+    response = admin_client.patch(
+        f"/api/v1/users/admin/{suffix}",
+        json=payload,
+        headers=_csrf(admin_client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "LAST_ACTIVE_ADMIN"
+
+
+def test_concurrent_admin_deactivations_leave_one_active_admin(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    database_sessions: sessionmaker[Session],
+) -> None:
+    created = admin_client.post(
+        "/api/v1/users",
+        json={
+            "username": "backup-admin",
+            "password": "backup-safe-password",
+            "role": "admin",
+            "pages": [],
+        },
+        headers=_csrf(admin_client),
+    )
+    assert created.status_code == 201
+    service = auth_app.state.user_administration_service
+
+    def deactivate(username: str) -> str:
+        try:
+            service.set_active(username, False)
+            return "disabled"
+        except APIError as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(deactivate, ["admin", "backup-admin"]))
+
+    assert sorted(outcomes) == ["LAST_ACTIVE_ADMIN", "disabled"]
+    with database_sessions() as database:
+        active_admins = list(
+            database.scalars(select(User).where(User.role == "admin", User.is_active.is_(True)))
+        )
+        assert len(active_admins) == 1
+
+
+def test_failed_dual_write_runs_rollback_compensation_sync_and_close_even_when_each_cleanup_fails(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del admin_client
+    service = auth_app.state.user_administration_service
+    original = password_file.read_bytes()
+    real_session = service._sessions()
+    cleanup_calls: list[str] = []
+
+    class FailingSession:
+        def __getattr__(self, name: str):
+            return getattr(real_session, name)
+
+        def commit(self) -> None:
+            raise KeyboardInterrupt("primary interruption")
+
+        def rollback(self) -> None:
+            cleanup_calls.append("rollback")
+            raise RuntimeError("rollback failed")
+
+        def close(self) -> None:
+            cleanup_calls.append("close")
+            raise RuntimeError("close failed")
+
+    service._sessions = lambda: FailingSession()
+
+    def fail_compensation(*_args, **_kwargs):
+        cleanup_calls.append("compensate")
+        raise SystemExit("compensation failed")
+
+    def fail_sync() -> None:
+        cleanup_calls.append("sync")
+        raise RuntimeError("sync failed")
+
+    monkeypatch.setattr(service, "_compensate", fail_compensation)
+    monkeypatch.setattr(service, "_synchronize_final_file", fail_sync)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="primary interruption"):
+            service.create_user("interrupt-user", "interrupt-safe-password", "user", set())
+        assert cleanup_calls == ["rollback", "compensate", "sync", "close"]
+    finally:
+        real_session.rollback()
+        real_session.close()
+        password_file.write_bytes(original)
+        os.chmod(password_file, 0o600)
+
+
+def test_admin_read_endpoints_do_not_require_csrf(admin_client: TestClient) -> None:
+    assert admin_client.get("/api/v1/users").status_code == 200
+    assert admin_client.get("/api/v1/settings/effective").status_code == 200
+
+
+def test_user_list_has_bounded_pagination_and_closed_sorting(
+    admin_client: TestClient,
+) -> None:
+    for username in ("alpha-user", "zulu-user"):
+        response = admin_client.post(
+            "/api/v1/users",
+            json={
+                "username": username,
+                "password": "pagination-safe-password",
+                "role": "user",
+                "pages": [],
+            },
+            headers=_csrf(admin_client),
+        )
+        assert response.status_code == 201
+
+    response = admin_client.get("/api/v1/users?offset=0&limit=2&sort=username&order=desc")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["offset"] == 0
+    assert payload["limit"] == 2
+    assert payload["total"] >= 3
+    assert [item["username"] for item in payload["items"]] == ["zulu-user", "alpha-user"]
+    for query in ("limit=0", "limit=101", "sort=password_hash", "order=random"):
+        assert admin_client.get(f"/api/v1/users?{query}").status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/api/v1/users",
+            {
+                "username": "invalid:name",
+                "password": "valid-safe-password",
+                "role": "user",
+                "pages": [],
+            },
+        ),
+        ("/api/v1/users/admin/password", {"password": "invalid:password"}),
+    ],
+)
+def test_password_file_syntax_is_rejected_at_the_request_boundary(
+    admin_client: TestClient,
+    password_file: Path,
+    path: str,
+    payload: dict[str, object],
+) -> None:
+    original = password_file.read_bytes()
+    method = admin_client.post if path == "/api/v1/users" else admin_client.patch
+
+    response = method(path, json=payload, headers=_csrf(admin_client))
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert password_file.read_bytes() == original
+
+
+def test_management_failure_writes_safe_structured_audit_record(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    password_file: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_list(**_kwargs):
+        raise UserAdministrationError("safe failure")
+
+    monkeypatch.setattr(auth_app.state.user_administration_service, "list_users", fail_list)
+
+    with caplog.at_level("WARNING", logger="policy_analysis.audit"):
+        response = admin_client.get("/api/v1/users")
+
+    assert response.status_code == 503
+    audit_records = [record.audit for record in caplog.records if hasattr(record, "audit")]
+    assert audit_records == [
+        {
+            "event": "user_management_failed",
+            "actor": "admin",
+            "action": "list_users",
+            "target": None,
+            "request_id": response.headers["X-Request-ID"],
+            "error_code": "USER_ADMINISTRATION_FAILED",
+        }
+    ]
+    assert "audit-secret" not in caplog.text
+    assert str(password_file) not in caplog.text
+
+
+def test_real_route_enforces_require_page_for_admin_granted_and_rejected_users(
+    admin_client: TestClient,
+    auth_app: FastAPI,
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+) -> None:
+    settings_page_dependency = require_page(PageCode.SETTINGS)
+
+    def settings_probe(
+        current_user: PublicUser = Depends(settings_page_dependency),
+    ) -> dict[str, str]:
+        return {"username": current_user.username}
+
+    auth_app.add_api_route("/_test/settings-page", settings_probe, methods=["GET"])
+    for username, pages in (("page-granted", ["settings"]), ("page-rejected", ["policies"])):
+        response = admin_client.post(
+            "/api/v1/users",
+            json={
+                "username": username,
+                "password": "page-route-safe-password",
+                "role": "user",
+                "pages": pages,
+            },
+            headers=_csrf(admin_client),
+        )
+        assert response.status_code == 201
+
+    assert admin_client.get("/_test/settings-page").status_code == 200
+    for username, expected in (("page-granted", 200), ("page-rejected", 403)):
+        with client_context(auth_app) as page_client:
+            login = page_client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "page-route-safe-password"},
+            )
+            assert login.status_code == 200
+            assert page_client.get("/_test/settings-page").status_code == expected

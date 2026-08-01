@@ -18,7 +18,7 @@ from threading import Lock
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
@@ -389,6 +389,7 @@ class AuthService:
             ) from None
 
     def authenticate_session(self, token: str | None) -> AuthenticatedSession:
+        self._sync_users()
         if not token:
             raise _invalid_session()
         token_hash = _hash_token(token)
@@ -484,14 +485,32 @@ class UserAdministrationService:
         self._sessions = sessions
         self._password_hasher = password_hasher
 
-    def list_users(self) -> list[ManagedUser]:
+    def list_users(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        sort: str = "username",
+        descending: bool = False,
+    ) -> tuple[list[ManagedUser], int]:
         with self._user_sync.file_lock:
             self._user_sync._sync_if_changed_locked()
             with self._sessions() as database:
+                sort_column = {
+                    "username": User.username,
+                    "role": User.role,
+                    "is_active": User.is_active,
+                }[sort]
+                ordering = sort_column.desc() if descending else sort_column.asc()
+                total = database.scalar(select(func.count(User.id))) or 0
                 users = database.scalars(
-                    select(User).options(joinedload(User.page_permissions)).order_by(User.username)
+                    select(User)
+                    .options(joinedload(User.page_permissions))
+                    .order_by(ordering, User.username.asc())
+                    .offset(offset)
+                    .limit(limit)
                 ).unique()
-                return [_managed_user(user) for user in users]
+                return [_managed_user(user) for user in users], total
 
     def create_user(
         self,
@@ -503,16 +522,19 @@ class UserAdministrationService:
         def mutate(entries: list[PasswordEntry], database: Session) -> tuple[list[PasswordEntry], User]:
             if any(entry.username == username for entry in entries):
                 raise APIError(status_code=409, code="USER_EXISTS", message="用户名已存在。")
-            user = User(
-                username=username,
-                password_hash=self._password_hasher.hash(password),
-                role=role,
-                is_active=True,
-                password_synced_at=datetime.now(UTC),
+            user = database.scalar(
+                select(User).options(joinedload(User.page_permissions)).where(User.username == username)
             )
-            database.add(user)
+            if user is None:
+                user = User(username=username)
+                database.add(user)
+            user.password_hash = self._password_hasher.hash(password)
+            user.role = role
+            user.is_active = True
+            user.password_synced_at = datetime.now(UTC)
             database.flush()
             _replace_permissions(user, pages)
+            _revoke_user_sessions(database, user.id)
             return [*entries, PasswordEntry(username, password, role)], user
 
         return self._update(mutate)
@@ -529,6 +551,7 @@ class UserAdministrationService:
                 raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
             user.password_hash = self._password_hasher.hash(password)
             user.password_synced_at = datetime.now(UTC)
+            _revoke_user_sessions(database, user.id)
             return updated, user
 
         return self._update(mutate)
@@ -543,6 +566,7 @@ class UserAdministrationService:
             ]
             if not found:
                 raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
+            _ensure_admin_remains(database, user, next_role=role)
             user.role = role
             user.password_synced_at = datetime.now(UTC)
             return updated, user
@@ -564,7 +588,10 @@ class UserAdministrationService:
                                 code="USER_NOT_FOUND",
                                 message="用户不存在。",
                             )
+                    _ensure_admin_remains(database, user, next_active=is_active)
                     user.is_active = is_active
+                    if not is_active:
+                        _revoke_user_sessions(database, user.id)
                     database.flush()
                     result = _managed_user(user)
             except APIError:
@@ -602,7 +629,9 @@ class UserAdministrationService:
             original_contents, original_entries = self._read_entries_locked()
             database = self._sessions()
             file_replaced = False
-            operation_failed = False
+            updated_entries = original_entries
+            result: ManagedUser | None = None
+            failure: BaseException | None = None
             try:
                 updated_entries, user = mutate(original_entries, database)
                 database.flush()
@@ -611,24 +640,29 @@ class UserAdministrationService:
                 database.commit()
                 result = _managed_user(user)
                 self._user_sync.record_managed_snapshot(updated_entries)
-                return result
-            except APIError:
-                database.rollback()
-                raise
             except BaseException as error:
-                database.rollback()
-                final_entries = updated_entries if "updated_entries" in locals() else original_entries
-                if file_replaced or _file_contains_attempted_update(error):
-                    final_entries = self._compensate(
-                        original_contents,
-                        original_entries,
-                        final_entries,
+                failure = error
+            if failure is not None:
+                _ignore_cleanup_failure(database.rollback)
+                if file_replaced or _file_contains_attempted_update(failure):
+                    _ignore_cleanup_failure(
+                        lambda: self._compensate(
+                            original_contents,
+                            original_entries,
+                            updated_entries,
+                        )
                     )
-                self._synchronize_final_file()
-                operation_failed = True
-            finally:
-                database.close()
-            if operation_failed:
+                _ignore_cleanup_failure(self._synchronize_final_file)
+            close_failure = _capture_cleanup_failure(database.close)
+            if failure is None and close_failure is None:
+                if result is None:
+                    raise AssertionError("用户管理操作未返回结果")
+                return result
+            if isinstance(failure, APIError):
+                raise failure
+            if failure is not None and not isinstance(failure, Exception):
+                raise failure
+            if failure is not None or close_failure is not None:
                 raise UserAdministrationError("用户管理操作失败") from None
             raise AssertionError("用户管理操作未返回结果")
 
@@ -674,6 +708,47 @@ def _find_user(database: Session, username: str) -> User:
     if user is None:
         raise APIError(status_code=404, code="USER_NOT_FOUND", message="用户不存在。")
     return user
+
+
+def _revoke_user_sessions(database: Session, user_id: int) -> None:
+    database.execute(delete(SessionRecord).where(SessionRecord.user_id == user_id))
+
+
+def _ensure_admin_remains(
+    database: Session,
+    user: User,
+    *,
+    next_role: str | None = None,
+    next_active: bool | None = None,
+) -> None:
+    resulting_role = user.role if next_role is None else next_role
+    resulting_active = user.is_active if next_active is None else next_active
+    removes_active_admin = (
+        user.role == "admin" and user.is_active and not (resulting_role == "admin" and resulting_active)
+    )
+    if not removes_active_admin:
+        return
+    active_admins = database.scalar(
+        select(func.count(User.id)).where(User.role == "admin", User.is_active.is_(True))
+    )
+    if active_admins == 1:
+        raise APIError(
+            status_code=409,
+            code="LAST_ACTIVE_ADMIN",
+            message="必须保留至少一个启用的管理员。",
+        )
+
+
+def _ignore_cleanup_failure(operation: Callable[[], object]) -> None:
+    _capture_cleanup_failure(operation)
+
+
+def _capture_cleanup_failure(operation: Callable[[], object]) -> BaseException | None:
+    try:
+        operation()
+    except BaseException as error:
+        return error
+    return None
 
 
 def _replace_permissions(user: User, pages: set[str]) -> None:

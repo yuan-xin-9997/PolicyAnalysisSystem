@@ -1,17 +1,20 @@
 """Authentication and user-administration API routes."""
 
+from __future__ import annotations
+
+import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request, Response, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from pydantic import BaseModel, Field, model_validator
 
 from policy_analysis.auth.dependencies import (
     get_auth_service,
     require_csrf_session,
     require_user,
 )
-from policy_analysis.auth.password_file import PasswordFileError
-from policy_analysis.auth.permissions import PageCode, require_admin_csrf
+from policy_analysis.auth.password_file import PasswordFileError, validate_password_entry
+from policy_analysis.auth.permissions import PageCode, require_admin, require_admin_csrf
 from policy_analysis.auth.service import (
     AuthenticatedSession,
     AuthService,
@@ -24,6 +27,7 @@ from policy_analysis.core.errors import APIError
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 users_router = APIRouter(prefix="/api/v1/users", tags=["users"])
+audit_logger = logging.getLogger("policy_analysis.audit")
 
 
 class LoginRequest(BaseModel):
@@ -78,9 +82,25 @@ class CreateUserRequest(BaseModel):
     role: Literal["admin", "user"]
     pages: set[PageCode] = Field(default_factory=set)
 
+    @model_validator(mode="after")
+    def validate_password_file_grammar(self) -> CreateUserRequest:
+        try:
+            validate_password_entry(self.username, self.password, self.role)
+        except ValueError:
+            raise ValueError("用户名或密码不符合凭据文件语法") from None
+        return self
+
 
 class ChangePasswordRequest(BaseModel):
     password: str = Field(min_length=8, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_password_file_grammar(self) -> ChangePasswordRequest:
+        try:
+            validate_password_entry("request-validation", self.password, "user")
+        except ValueError:
+            raise ValueError("密码不符合凭据文件语法") from None
+        return self
 
 
 class ChangeRoleRequest(BaseModel):
@@ -101,15 +121,37 @@ def get_user_administration_service(request: Request) -> UserAdministrationServi
 
 @users_router.get("")
 def list_users(
-    _admin: PublicUser = Depends(require_admin_csrf),
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    sort: Literal["username", "role", "is_active"] = "username",
+    order: Literal["asc", "desc"] = "asc",
+    _admin: PublicUser = Depends(require_admin),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
-    return {"items": [user.to_dict() for user in _admin_call(service.list_users)]}
+    users, total = _admin_call(
+        service.list_users,
+        request=request,
+        actor=_admin,
+        action="list_users",
+        target=None,
+        offset=offset,
+        limit=limit,
+        sort=sort,
+        descending=order == "desc",
+    )
+    return {
+        "items": [user.to_dict() for user in users],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @users_router.post("", status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: CreateUserRequest,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
@@ -119,6 +161,10 @@ def create_user(
         payload.password,
         payload.role,
         {page.value for page in payload.pages},
+        request=request,
+        actor=_admin,
+        action="create_user",
+        target=payload.username,
     ).to_dict()
 
 
@@ -126,36 +172,64 @@ def create_user(
 def change_password(
     username: str,
     payload: ChangePasswordRequest,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
-    return _admin_call(service.change_password, username, payload.password).to_dict()
+    return _admin_call(
+        service.change_password,
+        username,
+        payload.password,
+        request=request,
+        actor=_admin,
+        action="change_password",
+        target=username,
+    ).to_dict()
 
 
 @users_router.patch("/{username}/role")
 def change_role(
     username: str,
     payload: ChangeRoleRequest,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
-    return _admin_call(service.change_role, username, payload.role).to_dict()
+    return _admin_call(
+        service.change_role,
+        username,
+        payload.role,
+        request=request,
+        actor=_admin,
+        action="change_role",
+        target=username,
+    ).to_dict()
 
 
 @users_router.patch("/{username}/status")
 def change_status(
     username: str,
     payload: ChangeStatusRequest,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
-    return _admin_call(service.set_active, username, payload.is_active).to_dict()
+    return _admin_call(
+        service.set_active,
+        username,
+        payload.is_active,
+        request=request,
+        actor=_admin,
+        action="change_status",
+        target=username,
+    ).to_dict()
 
 
 @users_router.patch("/{username}/pages")
 def change_pages(
     username: str,
     payload: ChangePagesRequest,
+    request: Request,
     _admin: PublicUser = Depends(require_admin_csrf),
     service: UserAdministrationService = Depends(get_user_administration_service),
 ) -> dict[str, object]:
@@ -163,15 +237,53 @@ def change_pages(
         service.set_pages,
         username,
         {page.value for page in payload.pages},
+        request=request,
+        actor=_admin,
+        action="change_pages",
+        target=username,
     ).to_dict()
 
 
-def _admin_call(operation, *args):
+def _admin_call(
+    operation,
+    *args,
+    request: Request,
+    actor: PublicUser,
+    action: str,
+    target: str | None,
+    **kwargs,
+):
     try:
-        return operation(*args)
+        return operation(*args, **kwargs)
+    except APIError as error:
+        _audit_failure(request, actor, action, target, error.code)
+        raise
     except (PasswordFileError, PasswordSyncError, UserAdministrationError):
+        _audit_failure(request, actor, action, target, "USER_ADMINISTRATION_FAILED")
         raise APIError(
             status_code=503,
             code="USER_ADMINISTRATION_FAILED",
             message="用户管理服务暂时不可用。",
         ) from None
+
+
+def _audit_failure(
+    request: Request,
+    actor: PublicUser,
+    action: str,
+    target: str | None,
+    error_code: str,
+) -> None:
+    audit_logger.warning(
+        "user_management_failed",
+        extra={
+            "audit": {
+                "event": "user_management_failed",
+                "actor": actor.username,
+                "action": action,
+                "target": target,
+                "request_id": request.state.request_id,
+                "error_code": error_code,
+            }
+        },
+    )

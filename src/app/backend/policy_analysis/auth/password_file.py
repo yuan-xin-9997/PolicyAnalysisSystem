@@ -182,6 +182,11 @@ def render_password_text(entries: list[PasswordEntry]) -> str:
     return "\n".join([_HEADER, _ROLE_HELP, *(f"{e.username}:{e.password}:{e.role}" for e in entries)]) + "\n"
 
 
+def validate_password_entry(username: str, password: str, role: Role) -> None:
+    """Validate one API-supplied credential using the password-file grammar."""
+    _validate_entry(PasswordEntry(username, password, role), set(), "请求")
+
+
 def replace_password_file(path: Path, entries: list[PasswordEntry]) -> None:
     """Replace credentials atomically, retaining a recovery copy until durable."""
     rendered_text = render_password_text(entries)
@@ -395,7 +400,8 @@ def _assert_private_regular(path: Path) -> _PrivateFileFingerprint:
 
 def _assert_private_regular_stat(status: os.stat_result) -> None:
     if not stat.S_ISREG(status.st_mode) or (
-        _uses_posix_file_security() and stat.S_IMODE(status.st_mode) != 0o600
+        _uses_posix_file_security()
+        and (stat.S_IMODE(status.st_mode) != 0o600 or status.st_nlink > 1 or status.st_uid != os.geteuid())
     ):
         raise PasswordFileError("凭据文件类型或权限无效")
 

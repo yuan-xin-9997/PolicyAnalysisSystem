@@ -25,6 +25,27 @@ def test_parse_ignores_comments_and_preserves_valid_roles() -> None:
     ]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 文件所有权约束")
+def test_private_password_file_rejects_hardlinks_and_foreign_owners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "password.txt"
+    path.write_text("admin:admin123:admin\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    hardlink = tmp_path / "password-hardlink.txt"
+    os.link(path, hardlink)
+
+    with pytest.raises(PasswordFileError, match="类型或权限无效"):
+        password_file_module._assert_private_regular(path)
+
+    hardlink.unlink()
+    status = path.stat()
+    monkeypatch.setattr(os, "geteuid", lambda: status.st_uid + 1)
+    with pytest.raises(PasswordFileError, match="类型或权限无效"):
+        password_file_module._assert_private_regular_stat(status)
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [

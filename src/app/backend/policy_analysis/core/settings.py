@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ _BUILD_METADATA_NAMES = {"POLICY_ANALYSIS_VERSION", "POLICY_ANALYSIS_COMMIT_SHA"
 
 
 class StrictSettingsModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class ServerSettings(StrictSettingsModel):
@@ -52,6 +53,12 @@ class AppSettings(StrictSettingsModel):
     tasks: TaskSettings = Field(default_factory=TaskSettings)
 
 
+@dataclass(frozen=True, slots=True)
+class SettingsSnapshot:
+    settings: AppSettings
+    sources: dict[str, str]
+
+
 def _set_nested(data: dict[str, Any], keys: list[str], value: Any) -> None:
     current = data
     for key in keys[:-1]:
@@ -74,14 +81,23 @@ def load_settings(
     project_root: Path,
     environ: Mapping[str, str],
 ) -> AppSettings:
-    data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-    for name, raw_value in environ.items():
+    return load_settings_snapshot(config_path, project_root, environ).settings
+
+
+def load_settings_snapshot(
+    config_path: Path,
+    project_root: Path,
+    environ: Mapping[str, str],
+) -> SettingsSnapshot:
+    configured = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    data = json.loads(json.dumps(configured))
+    for name, raw_value in sorted(environ.items(), key=lambda item: item[0].count("__")):
         if not name.startswith("POLICY_ANALYSIS_") or name in _BUILD_METADATA_NAMES:
             continue
         keys = [part.lower() for part in name.removeprefix("POLICY_ANALYSIS_").split("__")]
         _set_nested(data, keys, _parse_environment_value(raw_value))
     settings = AppSettings.model_validate(data)
-    return settings.model_copy(
+    resolved = settings.model_copy(
         update={
             "database": settings.database.model_copy(
                 update={"path": resolve_project_path(project_root, settings.database.path)}
@@ -91,6 +107,7 @@ def load_settings(
             ),
         }
     )
+    return SettingsSnapshot(resolved, _settings_sources(configured, environ))
 
 
 def masked_settings(settings: AppSettings) -> dict[str, object]:
@@ -110,8 +127,12 @@ def masked_settings(settings: AppSettings) -> dict[str, object]:
 
 
 def settings_sources(config_path: Path, environ: Mapping[str, str]) -> dict[str, str]:
-    defaults = AppSettings().model_dump(mode="json")
     configured = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    return _settings_sources(configured, environ)
+
+
+def _settings_sources(configured: dict[str, Any], environ: Mapping[str, str]) -> dict[str, str]:
+    defaults = AppSettings().model_dump(mode="json")
 
     def flatten(value: Any, prefix: str = "") -> dict[str, Any]:
         if not isinstance(value, dict):
@@ -124,8 +145,13 @@ def settings_sources(config_path: Path, environ: Mapping[str, str]) -> dict[str,
 
     sources = {path: "default" for path in flatten(defaults)}
     sources.update({path: "config_file" for path in flatten(configured)})
-    for name in environ:
+    for name, raw_value in sorted(environ.items(), key=lambda item: item[0].count("__")):
         if name.startswith("POLICY_ANALYSIS_") and name not in _BUILD_METADATA_NAMES:
             path = name.removeprefix("POLICY_ANALYSIS_").lower().replace("__", ".")
-            sources[path] = "environment"
+            parsed = _parse_environment_value(raw_value)
+            if isinstance(parsed, dict):
+                sources.update({leaf: "environment" for leaf in flatten(parsed, path)})
+                sources.pop(path, None)
+            else:
+                sources[path] = "environment"
     return sources
