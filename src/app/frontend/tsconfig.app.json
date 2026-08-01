@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "vitest": ["./node_modules/vitest/dist/index.d.ts"],
+      "@testing-library/vue": ["./node_modules/@testing-library/vue/types/index.d.ts"],
+      "pinia": ["./node_modules/pinia/dist/pinia.d.ts"],
+      "vue-router": ["./node_modules/vue-router/dist/vue-router.d.mts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "../../tests/frontend/**/*.ts"]
+}

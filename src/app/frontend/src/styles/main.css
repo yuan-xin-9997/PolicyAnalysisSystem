@@ -1,0 +1,89 @@
+:root {
+  color: #17221d;
+  background: #edf1ec;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input { font: inherit; }
+button, a, input { outline-offset: 3px; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #d49a42; }
+
+.app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 32px; padding: 28px 20px 20px; color: #f7f3e8; background: #153c32; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 8px; }
+.brand-mark { display: inline-grid; flex: 0 0 auto; width: 42px; height: 42px; place-items: center; border-radius: 12px; color: #153c32; background: #e8b65e; font: 700 21px/1 ui-serif, Georgia, serif; }
+.brand strong { display: block; font-size: 16px; letter-spacing: .04em; }
+.brand small { display: block; margin-top: 4px; color: #a9c3b8; font-size: 10px; letter-spacing: .18em; }
+.main-nav { display: flex; flex-direction: column; gap: 6px; }
+.main-nav a { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 14px; border-radius: 10px; color: #cce0d7; text-decoration: none; transition: background .18s ease, color .18s ease; }
+.main-nav a:hover, .main-nav a.router-link-active { color: #fffaf0; background: #245748; }
+.nav-dot { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
+.main-nav a.router-link-active .nav-dot { border-color: #e8b65e; background: #e8b65e; }
+.account-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding: 16px 10px 4px; border-top: 1px solid #376356; }
+.account-copy { min-width: 0; display: grid; gap: 3px; }
+.account-copy strong { overflow: hidden; text-overflow: ellipsis; }
+.account-label, .version { color: #a9c3b8; font-size: 11px; }
+.signout-button { min-height: 36px; padding: 0 12px; border: 1px solid #5f8277; border-radius: 9px; color: #f7f3e8; background: transparent; cursor: pointer; }
+.signout-button:hover { background: #245748; }
+.workspace { min-width: 0; padding: 48px clamp(24px, 5vw, 72px); }
+.page-panel { width: min(1120px, 100%); margin: 0 auto; padding: clamp(24px, 4vw, 44px); border: 1px solid #dce3dc; border-radius: 22px; background: #fff; box-shadow: 0 16px 48px rgb(26 54 44 / 7%); }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
+.page-heading h1, .placeholder-panel h1 { margin: 7px 0 8px; color: #153c32; font: 700 clamp(28px, 4vw, 44px)/1.12 ui-serif, Georgia, "Songti SC", serif; }
+.page-heading p, .placeholder-panel p { max-width: 680px; margin: 0; color: #65736d; line-height: 1.7; }
+.eyebrow { color: #a86820; font-size: 11px; font-weight: 800; letter-spacing: .17em; }
+.count-chip, .status-pill, .planning-badge { display: inline-flex; align-items: center; width: max-content; min-height: 30px; padding: 0 11px; border-radius: 999px; color: #27614f; background: #e3f2ea; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.status-pill.muted { color: #6d6659; background: #efede7; }
+.state-card { padding: 28px; border: 1px dashed #c8d4cd; border-radius: 14px; color: #5e6b65; text-align: center; background: #f8faf8; }
+.error-state, .form-error { color: #a2392f; }
+.table-wrap { overflow-x: auto; border: 1px solid #e1e7e2; border-radius: 14px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { padding: 15px 18px; border-bottom: 1px solid #e8ece9; text-align: left; vertical-align: top; }
+th { color: #65736d; background: #f6f8f6; font-size: 12px; letter-spacing: .04em; }
+tbody tr:last-child td { border-bottom: 0; }
+.setting-value { max-width: 480px; overflow-wrap: anywhere; }
+code { color: #27614f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.placeholder-panel { min-height: 420px; display: flex; flex-direction: column; justify-content: center; }
+.planning-badge { margin-top: 26px; color: #8b5b19; background: #fff0d2; }
+
+.login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); align-items: center; gap: clamp(40px, 8vw, 120px); padding: clamp(28px, 7vw, 96px); background: radial-gradient(circle at 12% 20%, #315f50 0, #153c32 35%, #0e2e27 68%); }
+.login-intro { max-width: 660px; color: #f8f4e8; }
+.login-intro .eyebrow { color: #e8b65e; }
+.login-intro h1 { margin: 16px 0 24px; font: 700 clamp(48px, 7vw, 88px)/1.02 ui-serif, Georgia, "Songti SC", serif; letter-spacing: -.035em; }
+.login-intro p { max-width: 520px; color: #c4d7cf; font-size: 17px; line-height: 1.8; }
+.login-card { width: min(460px, 100%); justify-self: end; padding: clamp(28px, 5vw, 48px); border: 1px solid rgb(255 255 255 / 42%); border-radius: 24px; background: rgb(250 249 244 / 97%); box-shadow: 0 30px 90px rgb(0 0 0 / 24%); }
+.login-card-heading { display: flex; align-items: center; gap: 14px; margin-bottom: 34px; }
+.login-card h2 { margin: 0; color: #153c32; font: 700 28px/1.2 ui-serif, Georgia, "Songti SC", serif; }
+.login-card-heading p { margin: 4px 0 0; color: #78837e; font-size: 13px; }
+.login-card form { display: grid; gap: 20px; }
+.field { display: grid; gap: 8px; }
+.field label { color: #34473f; font-size: 13px; font-weight: 700; }
+.field input { width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid #cbd4cf; border-radius: 10px; color: #17221d; background: #fff; }
+.field input:focus { border-color: #27614f; }
+.form-error { margin: -4px 0 0; font-size: 13px; line-height: 1.5; }
+.primary-button { min-height: 50px; border: 0; border-radius: 11px; color: #fff; background: #21604e; font-weight: 800; cursor: pointer; }
+.primary-button:hover:not(:disabled) { background: #174b3d; }
+.primary-button:disabled { cursor: wait; opacity: .68; }
+
+@media (max-width: 820px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: static; width: 100%; height: auto; gap: 18px; padding: 18px; }
+  .main-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .account-panel { margin-top: 0; }
+  .workspace { padding: 20px 14px 36px; }
+  .login-page { grid-template-columns: 1fr; padding: 28px 18px; }
+  .login-intro { display: none; }
+  .login-card { justify-self: center; }
+}
+
+@media (max-width: 520px) {
+  .brand { padding: 0; }
+  .main-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .main-nav a { padding: 0 10px; }
+  .page-heading { flex-direction: column; }
+  .page-panel { padding: 22px 16px; border-radius: 16px; }
+  th, td { padding: 12px; }
+}

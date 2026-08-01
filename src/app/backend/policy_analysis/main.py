@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from urllib.parse import unquote
 
 from argon2 import PasswordHasher
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import Engine
 
 from policy_analysis.auth.routes import router as auth_router
@@ -19,10 +21,14 @@ from policy_analysis.system.routes import health_router, resolve_build_metadata
 from policy_analysis.system.routes import router as system_router
 
 
-def create_app(auth_service: AuthService | None = None) -> FastAPI:
+def create_app(
+    auth_service: AuthService | None = None,
+    frontend_dist: Path | None = None,
+) -> FastAPI:
     project_root = Path(__file__).resolve().parents[4]
     environment = dict(os.environ)
     config_path = project_root / "src/config/app.json"
+    resolved_frontend_dist = frontend_dist or project_root / "src/app/frontend/dist"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -73,7 +79,43 @@ def create_app(auth_service: AuthService | None = None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(system_router)
     app.include_router(health_router)
+    _install_spa_routes(app, resolved_frontend_dist)
     return app
+
+
+def _install_spa_routes(app: FastAPI, frontend_dist: Path) -> None:
+    """Serve a built SPA without weakening API or filesystem boundaries."""
+
+    root = frontend_dist.resolve()
+    index = (root / "index.html").resolve()
+    if not index.is_file() or not index.is_relative_to(root):
+        return
+
+    @app.middleware("http")
+    async def serve_spa_fallback(request: Request, call_next):
+        response = await call_next(request)
+        if request.method != "GET" or response.status_code != 404:
+            return response
+
+        raw_path = unquote(request.scope.get("raw_path", b"").decode("latin-1"))
+        decoded_parts = Path(raw_path).parts
+        spa_path = request.url.path.lstrip("/")
+        if ".." in decoded_parts or spa_path in {"api", "health"}:
+            return response
+        if spa_path.startswith(("api/", "health/")):
+            return response
+
+        relative_path = Path(spa_path)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            return response
+        candidate = (root / relative_path).resolve()
+        if not candidate.is_relative_to(root):
+            return response
+        if candidate.is_file():
+            return FileResponse(candidate)
+        if spa_path.startswith("assets/"):
+            return response
+        return FileResponse(index, media_type="text/html")
 
 
 def _build_default_auth_service(settings: AppSettings | None = None) -> tuple[AuthService, Engine]:
