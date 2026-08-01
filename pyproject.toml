@@ -32,6 +32,9 @@ where = ["src/app/backend"]
 [tool.pytest.ini_options]
 testpaths = ["src/tests/backend"]
 addopts = "-ra"
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["policy_analysis"]

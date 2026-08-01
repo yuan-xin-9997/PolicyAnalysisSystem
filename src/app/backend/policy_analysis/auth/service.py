@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import secrets
+import time
+import unicodedata
+from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, joinedload, sessionmaker
 
-from policy_analysis.auth.models import User
+from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.password_file import (
     PasswordEntry,
     PasswordFileError,
@@ -22,6 +32,7 @@ from policy_analysis.auth.password_file import (
 )
 from policy_analysis.auth.repository import UserRepository
 from policy_analysis.core.database import session_scope
+from policy_analysis.core.errors import APIError
 
 
 class PasswordSyncError(RuntimeError):
@@ -41,9 +52,14 @@ class UserSyncService:
         self._sessions = sessions
         self._password_hasher = password_hasher
         self._last_fingerprint: _PasswordFileFingerprint | None = None
+        self._sync_lock = Lock()
 
     def sync_if_changed(self) -> bool:
         """Synchronize after a new file mtime; return whether database work was performed."""
+        with self._sync_lock:
+            return self._sync_if_changed_locked()
+
+    def _sync_if_changed_locked(self) -> bool:
         contents, fingerprint = self._read_stable_snapshot()
         if self._last_fingerprint == fingerprint:
             return False
@@ -134,6 +150,253 @@ class UserSyncService:
             return self._password_hasher.check_needs_rehash(user.password_hash)
         except (InvalidHashError, VerificationError):
             return True
+
+
+@dataclass(frozen=True, slots=True)
+class PublicUser:
+    id: int
+    username: str
+    role: str
+    page_permissions: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "page_permissions": list(self.page_permissions),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LoginResult:
+    token: str
+    csrf_token: str
+    user: PublicUser
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedSession:
+    id: int
+    user: PublicUser
+    csrf_token_hash: str
+
+
+class LoginRateLimiter:
+    """Bound failed logins by peer address and canonical account identifier."""
+
+    def __init__(
+        self,
+        *,
+        attempts: int,
+        window_seconds: int,
+        monotonic: Callable[[], float] | None = None,
+    ) -> None:
+        self._attempts = attempts
+        self._window_seconds = window_seconds
+        self._monotonic = monotonic or time.monotonic
+        self._failures: dict[tuple[str, str], deque[float]] = {}
+        self._state_lock = Lock()
+        self._key_locks = tuple(Lock() for _ in range(64))
+
+    @contextmanager
+    def guard(self, key: tuple[str, str]) -> Iterator[None]:
+        """Serialize a complete login attempt for the same logical rate key."""
+        lock = self._key_locks[hash(key) % len(self._key_locks)]
+        with lock:
+            yield
+
+    def ensure_allowed(self, key: tuple[str, str]) -> None:
+        with self._state_lock:
+            now = self._monotonic()
+            self._remove_expired(now)
+            if len(self._failures.get(key, ())) >= self._attempts:
+                raise APIError(
+                    status_code=429,
+                    code="LOGIN_RATE_LIMITED",
+                    message="登录尝试过于频繁，请稍后重试。",
+                )
+
+    def record_failure(self, key: tuple[str, str]) -> None:
+        with self._state_lock:
+            now = self._monotonic()
+            self._remove_expired(now)
+            self._failures.setdefault(key, deque()).append(now)
+
+    def clear(self, key: tuple[str, str]) -> None:
+        with self._state_lock:
+            self._failures.pop(key, None)
+
+    def _remove_expired(self, now: float) -> None:
+        cutoff = now - self._window_seconds
+        expired_keys: list[tuple[str, str]] = []
+        for key, failures in self._failures.items():
+            while failures and failures[0] <= cutoff:
+                failures.popleft()
+            if not failures:
+                expired_keys.append(key)
+        for key in expired_keys:
+            self._failures.pop(key, None)
+
+
+class AuthService:
+    """Authenticate credentials and manage opaque server-side sessions."""
+
+    def __init__(
+        self,
+        *,
+        sessions: sessionmaker[Session],
+        user_sync: UserSyncService,
+        password_hasher: PasswordHasher,
+        session_hours: int,
+        secure_cookie: bool,
+        login_attempts: int,
+        login_window_seconds: int,
+        now: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
+    ) -> None:
+        self._sessions = sessions
+        self._user_sync = user_sync
+        self._password_hasher = password_hasher
+        self._session_hours = session_hours
+        self.secure_cookie = secure_cookie
+        self._now = now or (lambda: datetime.now(UTC))
+        self._dummy_password_hash = password_hasher.hash(secrets.token_urlsafe(32))
+        self._login_limiter = LoginRateLimiter(
+            attempts=login_attempts,
+            window_seconds=login_window_seconds,
+            monotonic=monotonic,
+        )
+
+    def login(self, username: str, password: str, client_address: str) -> LoginResult:
+        self._sync_users()
+        normalized_username = username.strip()
+        rate_key = (client_address, _normalize_account_identifier(username))
+        with self._login_limiter.guard(rate_key):
+            self._login_limiter.ensure_allowed(rate_key)
+            return self._create_session(normalized_username, password, rate_key)
+
+    def _create_session(
+        self,
+        username: str,
+        password: str,
+        rate_key: tuple[str, str],
+    ) -> LoginResult:
+        token = secrets.token_urlsafe(32)
+        csrf_token = secrets.token_urlsafe(32)
+        now = self._aware_now()
+
+        with session_scope(self._sessions) as database:
+            user = database.scalar(select(User).where(User.username == username))
+            verification_hash = user.password_hash if user is not None else self._dummy_password_hash
+            try:
+                password_matches = self._password_hasher.verify(verification_hash, password)
+            except (InvalidHashError, VerificationError):
+                password_matches = False
+            if user is None or not user.is_active or not password_matches:
+                self._login_limiter.record_failure(rate_key)
+                raise _invalid_credentials()
+
+            database.add(
+                SessionRecord(
+                    user_id=user.id,
+                    token_hash=_hash_token(token),
+                    csrf_token_hash=_hash_token(csrf_token),
+                    expires_at=now + timedelta(hours=self._session_hours),
+                    created_at=now,
+                    last_seen_at=now,
+                )
+            )
+            public_user = _public_user(user)
+
+        self._login_limiter.clear(rate_key)
+        return LoginResult(token=token, csrf_token=csrf_token, user=public_user)
+
+    def _sync_users(self) -> None:
+        try:
+            self._user_sync.sync_if_changed()
+        except (PasswordFileError, PasswordSyncError, RuntimeError, ValueError):
+            raise APIError(
+                status_code=503,
+                code="AUTH_SYNC_FAILED",
+                message="登录服务暂时不可用。",
+            ) from None
+
+    def authenticate_session(self, token: str | None) -> AuthenticatedSession:
+        if not token:
+            raise _invalid_session()
+        token_hash = _hash_token(token)
+        now = self._aware_now()
+        with session_scope(self._sessions) as database:
+            record = database.scalar(
+                select(SessionRecord)
+                .options(joinedload(SessionRecord.user).joinedload(User.page_permissions))
+                .where(SessionRecord.token_hash == token_hash)
+            )
+            stored_hash = record.token_hash if record is not None else "0" * 64
+            token_matches = hmac.compare_digest(stored_hash, token_hash)
+            if record is None or not token_matches or record.expires_at <= now or not record.user.is_active:
+                raise _invalid_session()
+            record.last_seen_at = now
+            return AuthenticatedSession(
+                id=record.id,
+                user=_public_user(record.user),
+                csrf_token_hash=record.csrf_token_hash,
+            )
+
+    def verify_csrf(self, session: AuthenticatedSession, csrf_token: str | None) -> None:
+        supplied_hash = _hash_token(csrf_token or "")
+        if not csrf_token or not hmac.compare_digest(session.csrf_token_hash, supplied_hash):
+            raise APIError(
+                status_code=403,
+                code="CSRF_INVALID",
+                message="CSRF 校验失败。",
+            )
+
+    def logout(self, session_id: int) -> None:
+        with session_scope(self._sessions) as database:
+            record = database.get(SessionRecord, session_id)
+            if record is not None:
+                database.delete(record)
+
+    def _aware_now(self) -> datetime:
+        value = self._now()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise RuntimeError("认证时钟必须返回带时区的时间")
+        return value.astimezone(UTC)
+
+
+def _public_user(user: User) -> PublicUser:
+    return PublicUser(
+        id=user.id,
+        username=user.username,
+        role=user.role,
+        page_permissions=tuple(sorted(permission.page_code for permission in user.page_permissions)),
+    )
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _normalize_account_identifier(username: str) -> str:
+    return unicodedata.normalize("NFKC", username).strip().casefold()
+
+
+def _invalid_credentials() -> APIError:
+    return APIError(
+        status_code=401,
+        code="AUTH_INVALID",
+        message="用户名或密码错误。",
+    )
+
+
+def _invalid_session() -> APIError:
+    return APIError(
+        status_code=401,
+        code="SESSION_INVALID",
+        message="会话无效或已过期。",
+    )
 
 
 def _decode_utf8_or_none(contents: bytes) -> str | None:
