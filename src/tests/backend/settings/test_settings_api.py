@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from policy_analysis.core.settings import load_settings_snapshot
+from policy_analysis.settings.routes import get_webfetch_ready_probe
 
 
 def _csrf(client: TestClient) -> dict[str, str]:
@@ -35,7 +36,11 @@ def test_effective_settings_are_masked_and_report_each_leaf_source(
     auth_app.state.settings_config_path = config_path
     auth_app.state.settings_environment = environment
 
-    response = admin_client.get("/api/v1/settings/effective", headers=_csrf(admin_client))
+    auth_app.dependency_overrides[get_webfetch_ready_probe] = lambda: lambda **_kwargs: False
+    try:
+        response = admin_client.get("/api/v1/settings/effective", headers=_csrf(admin_client))
+    finally:
+        auth_app.dependency_overrides.pop(get_webfetch_ready_probe, None)
 
     assert response.status_code == 200
     payload = response.json()
@@ -49,7 +54,7 @@ def test_effective_settings_are_masked_and_report_each_leaf_source(
     assert payload["sources"]["tasks.max_workers"] == "environment"
     assert set(payload["sources"].values()) <= {"default", "config_file", "environment"}
     assert _leaf_paths(payload["values"]) == set(payload["sources"])
-    assert payload["webfetch"] == {"status": "configured", "checked": False}
+    assert payload["webfetch"] == {"status": "unavailable", "checked": True}
 
 
 def test_settings_endpoint_requires_admin_but_not_csrf(

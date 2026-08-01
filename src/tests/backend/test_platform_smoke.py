@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from policy_analysis.auth.models import SessionRecord, User
 from policy_analysis.auth.permissions import all_page_codes
 from policy_analysis.main import create_app
+from policy_analysis.settings.routes import get_webfetch_ready_probe
 from sqlalchemy import select
 
 
@@ -53,6 +54,7 @@ def test_platform_authentication_and_permissions_smoke_flow(
         config_path=Path("config/app.json"),
         environment=environment,
     )
+    app.dependency_overrides[get_webfetch_ready_probe] = lambda: lambda **_kwargs: False
 
     assert app.state.project_root == project_root.resolve()
     assert app.state.settings_config_path == config_path.resolve()
@@ -119,7 +121,7 @@ def test_platform_authentication_and_permissions_smoke_flow(
             "config_file",
             "environment",
         }
-        assert settings_payload["webfetch"] == {"status": "configured", "checked": False}
+        assert settings_payload["webfetch"] == {"status": "unavailable", "checked": True}
 
         token_hash = hashlib.sha256(session_token.encode()).hexdigest()
         with app.state.database_sessions() as database:
