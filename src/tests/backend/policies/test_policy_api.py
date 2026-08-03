@@ -363,6 +363,23 @@ def test_policy_list_has_configured_limit_stable_sort_and_tie_breaker(
     assert oversized.status_code == 422
 
 
+def test_policy_list_rejects_page_overflow_before_sqlite_offset(
+    policy_api_runtime: tuple[FastAPI, sessionmaker[Session], Path, Engine],
+    policy_records: dict[str, object],
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+) -> None:
+    app, _sessions, _password_file, _engine = policy_api_runtime
+    with client_context(app, raise_server_exceptions=False) as admin:
+        _login(admin, "admin", "admin123")
+        maximum = admin.get("/api/v1/policies", params={"page": 1_000_000, "page_size": 1})
+        overflow = admin.get("/api/v1/policies", params={"page": 10**100, "page_size": 1})
+
+    assert maximum.status_code == 200
+    assert maximum.json()["items"] == []
+    assert overflow.status_code == 422
+    assert overflow.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 def test_policy_list_sorts_by_last_crawled_at_with_stable_tie_breaker(
     policy_api_runtime: tuple[FastAPI, sessionmaker[Session], Path, Engine],
     policy_records: dict[str, object],

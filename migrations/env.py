@@ -23,6 +23,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _database_path() -> Path:
+    database_path = config.attributes.get("database_path")
+    if database_path is not None:
+        if not isinstance(database_path, Path):
+            raise TypeError("Alembic database_path attribute must be a pathlib.Path")
+        return database_path.resolve()
     settings = load_settings(
         PROJECT_ROOT / "src/config/app.json",
         PROJECT_ROOT,

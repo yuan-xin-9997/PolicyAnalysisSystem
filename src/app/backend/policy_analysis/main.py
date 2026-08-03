@@ -4,8 +4,11 @@ import os
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from threading import RLock
 from urllib.parse import unquote
 
+from alembic import command
+from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
@@ -14,7 +17,7 @@ from sqlalchemy import Engine
 from policy_analysis.auth.routes import router as auth_router
 from policy_analysis.auth.routes import users_router
 from policy_analysis.auth.service import AuthService, UserAdministrationService, UserSyncService
-from policy_analysis.core.database import build_engine, create_schema, session_factory
+from policy_analysis.core.database import build_engine, session_factory
 from policy_analysis.core.errors import install_error_handlers
 from policy_analysis.core.settings import AppSettings, load_settings, load_settings_snapshot
 from policy_analysis.policies.routes import router as policies_router
@@ -22,6 +25,9 @@ from policy_analysis.settings.routes import router as settings_router
 from policy_analysis.sources.routes import router as sources_router
 from policy_analysis.system.routes import health_router, resolve_build_metadata
 from policy_analysis.system.routes import router as system_router
+
+_APPLICATION_ROOT = Path(__file__).resolve().parents[4]
+_MIGRATION_LOCK = RLock()
 
 
 def create_app(
@@ -32,9 +38,7 @@ def create_app(
     config_path: Path | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> FastAPI:
-    resolved_project_root = (
-        Path(__file__).resolve().parents[4] if project_root is None else Path(project_root).resolve()
-    )
+    resolved_project_root = _APPLICATION_ROOT if project_root is None else Path(project_root).resolve()
     resolved_environment = dict(os.environ) if environment is None else dict(environment)
     resolved_config_path = _resolve_factory_path(
         resolved_project_root,
@@ -65,6 +69,7 @@ def create_app(
                 resolved_project_root,
             )
             if owns_runtime:
+                _upgrade_database(snapshot.settings.database.path)
                 default_service, engine = _build_default_auth_service(snapshot.settings)
                 app.state.auth_service = default_service
             if isinstance(app.state.auth_service, AuthService):
@@ -190,11 +195,10 @@ def _spa_file_response(path: Path, original: Response, media_type: str | None = 
 
 
 def _build_default_auth_service(settings: AppSettings | None = None) -> tuple[AuthService, Engine]:
-    project_root = Path(__file__).resolve().parents[4]
+    project_root = _APPLICATION_ROOT
     settings = settings or load_settings(project_root / "src/config/app.json", project_root, os.environ)
     engine = build_engine(settings.database.path)
     try:
-        create_schema(engine)
         sessions = session_factory(engine)
         password_hasher = PasswordHasher()
         user_sync = UserSyncService(settings.auth.password_file, sessions, password_hasher)
@@ -213,6 +217,22 @@ def _build_default_auth_service(settings: AppSettings | None = None) -> tuple[Au
             engine.dispose()
         raise
     return service, engine
+
+
+def _upgrade_database(database_path: Path) -> None:
+    """Upgrade the default runtime database without mutating process configuration."""
+
+    try:
+        resolved_database_path = Path(database_path).resolve()
+        with _MIGRATION_LOCK:
+            config = Config()
+            config.set_main_option("script_location", str(_APPLICATION_ROOT / "migrations"))
+            config.set_main_option("prepend_sys_path", str(_APPLICATION_ROOT))
+            config.set_main_option("path_separator", "os")
+            config.attributes["database_path"] = resolved_database_path
+            command.upgrade(config, "head")
+    except Exception:
+        raise RuntimeError("数据库迁移失败，应用无法启动。") from None
 
 
 def _administration_service_for(auth_service: object) -> UserAdministrationService | None:

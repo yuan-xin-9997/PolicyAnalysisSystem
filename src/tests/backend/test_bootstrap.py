@@ -1,16 +1,32 @@
+import hashlib
+import json
+import logging
+import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import policy_analysis.main as main_module
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from policy_analysis.auth.models import User
 from policy_analysis.auth.service import AuthService, UserSyncService
+from policy_analysis.core.database import build_engine, session_factory
 from policy_analysis.core.settings import AppSettings
 from policy_analysis.main import create_app
+from policy_analysis.policies.models import Policy
+from policy_analysis.policies.schemas import PolicyWrite
+from policy_analysis.policies.service import PolicyService
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, Source
+from policy_analysis.tasks.models import CrawlTask, CrawlTaskItem
 from sqlalchemy import select
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_create_app_returns_fastapi() -> None:
@@ -84,11 +100,11 @@ def test_default_engine_is_disposed_when_startup_construction_fails(monkeypatch)
     monkeypatch.setattr(main_module, "build_engine", lambda path: engine)
     monkeypatch.setattr(
         main_module,
-        "create_schema",
-        lambda built_engine: (_ for _ in ()).throw(RuntimeError("schema failed")),
+        "session_factory",
+        lambda built_engine: (_ for _ in ()).throw(RuntimeError("session factory failed")),
     )
 
-    with pytest.raises(RuntimeError, match="schema failed"):
+    with pytest.raises(RuntimeError, match="session factory failed"):
         main_module._build_default_auth_service()
 
     assert engine.dispose_calls == 1
@@ -106,6 +122,7 @@ def test_default_service_is_rebuilt_and_disposed_for_each_lifespan(monkeypatch) 
         return result
 
     monkeypatch.setattr(main_module, "_build_default_auth_service", build_default_service)
+    monkeypatch.setattr(main_module, "_upgrade_database", lambda _database_path: None)
     app = create_app()
 
     with _test_client(app):
@@ -159,6 +176,157 @@ def test_default_service_builder_constructs_complete_runtime_with_temporary_path
         engine.dispose()
 
 
+def test_default_first_startup_migrates_to_head_and_supports_long_chinese_search(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, database_path = _write_default_runtime_files(tmp_path)
+    unrelated_database = tmp_path / "must-not-use.sqlite3"
+    monkeypatch.setenv("POLICY_ANALYSIS_DATABASE__PATH", str(unrelated_database))
+    unrelated_working_directory = tmp_path / "unrelated-working-directory"
+    unrelated_working_directory.mkdir()
+    monkeypatch.chdir(unrelated_working_directory)
+    app = create_app(
+        project_root=tmp_path,
+        config_path=config_path.relative_to(tmp_path),
+        environment={},
+    )
+
+    with _test_client(app) as client:
+        policy_id = _insert_searchable_policy(app.state.database_sessions)
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert login.status_code == 200
+        response = client.get("/api/v1/policies", params={"keyword": "中共中央政治局"})
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()["items"]] == [policy_id]
+        with app.state.database_sessions() as database:
+            assert database.execute(select_version()).scalar_one() == "0003"
+
+    assert database_path.is_file()
+    assert not unrelated_database.exists()
+    assert os.environ["POLICY_ANALYSIS_DATABASE__PATH"] == str(unrelated_database)
+
+
+def test_runtime_migration_serializes_concurrent_upgrades_of_same_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "concurrent.sqlite3"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(main_module._upgrade_database, [database_path, database_path]))
+
+    assert results == [None, None]
+    engine = build_engine(database_path)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(select_version()).scalar_one() == "0003"
+    finally:
+        engine.dispose()
+
+
+def test_runtime_migration_preserves_existing_logger_configuration(tmp_path: Path) -> None:
+    database_path = tmp_path / "logging.sqlite3"
+    logger = logging.getLogger("policy_analysis.audit.runtime_migration_test")
+    original_state = (logger.disabled, logger.level, logger.propagate, list(logger.handlers))
+    sentinel_handler = logging.NullHandler()
+    logger.disabled = False
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+    logger.handlers = [sentinel_handler]
+    try:
+        main_module._upgrade_database(database_path)
+
+        assert logger.disabled is False
+        assert logger.level == logging.ERROR
+        assert logger.propagate is False
+        assert logger.handlers == [sentinel_handler]
+    finally:
+        logger.disabled, logger.level, logger.propagate, handlers = original_state
+        logger.handlers = handlers
+
+
+def test_default_startup_upgrades_existing_0002_and_rebuilds_policy_fts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, database_path = _write_default_runtime_files(tmp_path)
+    monkeypatch.setenv("POLICY_ANALYSIS_DATABASE__PATH", str(database_path))
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    command.upgrade(config, "0002")
+    monkeypatch.delenv("POLICY_ANALYSIS_DATABASE__PATH")
+    engine = build_engine(database_path)
+    sessions = session_factory(engine)
+    try:
+        policy_id = _insert_existing_policy_without_fts(sessions)
+    finally:
+        engine.dispose()
+
+    app = create_app(
+        project_root=tmp_path,
+        config_path=config_path.relative_to(tmp_path),
+        environment={},
+    )
+    with _test_client(app) as client:
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert login.status_code == 200
+        response = client.get("/api/v1/policies", params={"keyword": "存量政策检索"})
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()["items"]] == [policy_id]
+        with app.state.database_sessions() as database:
+            assert database.execute(select_version()).scalar_one() == "0003"
+
+
+def test_default_startup_stops_on_sanitized_migration_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, _database_path = _write_default_runtime_files(tmp_path)
+
+    def fail_upgrade(*_args, **_kwargs) -> None:
+        raise RuntimeError("migration-secret-and-private-path")
+
+    monkeypatch.setattr(command, "upgrade", fail_upgrade)
+    monkeypatch.setattr(
+        main_module,
+        "_build_default_auth_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("runtime-must-not-continue-after-migration-failure")
+        ),
+    )
+    app = create_app(
+        project_root=tmp_path,
+        config_path=config_path.relative_to(tmp_path),
+        environment={},
+    )
+
+    with pytest.raises(RuntimeError) as raised, _test_client(app):
+        pass
+
+    assert str(raised.value) == "数据库迁移失败，应用无法启动。"
+    assert "migration-secret" not in str(raised.value)
+    assert "runtime-must-not-continue" not in str(raised.value)
+
+
+def test_injected_auth_service_does_not_migrate_caller_owned_database(
+    auth_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        command,
+        "upgrade",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("injected database must not be migrated")
+        ),
+    )
+
+    with _test_client(auth_app) as client:
+        assert client.get("/health/live").status_code == 200
+
+
 def test_default_lifespan_synchronizes_password_file_before_serving(
     password_file: Path,
     database_sessions,
@@ -181,6 +349,7 @@ def test_default_lifespan_synchronizes_password_file_before_serving(
     )
     engine = DisposableEngine()
     monkeypatch.setattr(main_module, "_build_default_auth_service", lambda _settings=None: (service, engine))
+    monkeypatch.setattr(main_module, "_upgrade_database", lambda _database_path: None)
     monkeypatch.setattr(main_module, "load_settings", lambda *_args: AppSettings())
     app = create_app()
 
@@ -214,6 +383,7 @@ def test_default_lifespan_cleans_half_initialized_runtime_on_setup_failure(
     )
     engine = DisposableEngine()
     monkeypatch.setattr(main_module, "_build_default_auth_service", lambda _settings=None: (service, engine))
+    monkeypatch.setattr(main_module, "_upgrade_database", lambda _database_path: None)
     if failure_stage == "administration":
         monkeypatch.setattr(
             main_module,
@@ -246,3 +416,127 @@ def _test_client(app: FastAPI) -> TestClient:
             category=DeprecationWarning,
         )
         return TestClient(app)
+
+
+def _write_default_runtime_files(project_root: Path) -> tuple[Path, Path]:
+    runtime = project_root / "runtime"
+    runtime.mkdir()
+    password_file = runtime / "password.txt"
+    password_file.write_text("admin:admin123:admin\n", encoding="utf-8")
+    os.chmod(password_file, 0o600)
+    config_path = project_root / "config" / "app.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "database": {"path": "runtime/app.sqlite3"},
+                "auth": {"password_file": "runtime/password.txt"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path, runtime / "app.sqlite3"
+
+
+def _insert_searchable_policy(sessions) -> int:
+    source_id, category_id, item_id = _insert_catalog_and_task_item(sessions)
+    content = "会议研究中共中央政治局工作安排。"
+    result = PolicyService(sessions).upsert(
+        PolicyWrite(
+            source_id=source_id,
+            category_id=category_id,
+            title="中共中央政治局召开会议",
+            canonical_url="https://www.news.cn/politics/startup.html",
+            publisher="新华社",
+            published_at=datetime(2026, 7, 30, tzinfo=UTC),
+            content_text=content,
+            content_hash=hashlib.sha256(content.encode()).hexdigest(),
+            webfetch_artifact_id="startup-artifact",
+            crawled_at=datetime(2026, 7, 31, tzinfo=UTC),
+        ),
+        task_item_id=item_id,
+    )
+    return result.policy_id
+
+
+def _insert_catalog_and_task_item(sessions) -> tuple[int, int, int]:
+    with sessions.begin() as database:
+        source = Source(
+            code="startup-xinhua",
+            name="新华网",
+            organization="新华社",
+            base_url="https://www.news.cn/",
+            adapter_type="xinhua",
+            allowed_domains_json='["news.cn"]',
+            is_active=True,
+        )
+        category = PolicyCategory(code="startup-meeting", name="会议", is_active=True)
+        database.add_all([source, category])
+        database.flush()
+        rule = CollectionRule(
+            source_id=source.id,
+            category_id=category.id,
+            name="启动测试规则",
+            include_keywords_json='["中共中央政治局"]',
+            exclude_keywords_json="[]",
+            history_years=5,
+            discovery_config_json='{"rss_urls":["https://www.news.cn/rss.xml"]}',
+            is_active=True,
+        )
+        database.add(rule)
+        database.flush()
+        task = CrawlTask(
+            rule_id=rule.id,
+            trigger_type="manual",
+            status="running",
+            request_snapshot_json="{}",
+        )
+        database.add(task)
+        database.flush()
+        item = CrawlTaskItem(
+            task_id=task.id,
+            candidate_url="https://www.news.cn/politics/startup.html",
+            status="stored",
+        )
+        database.add(item)
+        database.flush()
+        return source.id, category.id, item.id
+
+
+def _insert_existing_policy_without_fts(sessions) -> int:
+    with sessions.begin() as database:
+        source = Source(
+            code="existing-xinhua",
+            name="新华网",
+            organization="新华社",
+            base_url="https://www.news.cn/",
+            adapter_type="xinhua",
+            allowed_domains_json='["news.cn"]',
+            is_active=True,
+        )
+        category = PolicyCategory(code="existing-meeting", name="会议", is_active=True)
+        database.add_all([source, category])
+        database.flush()
+        content = "存量政策检索需要迁移后重建索引。"
+        policy = Policy(
+            source_id=source.id,
+            category_id=category.id,
+            title="存量政策检索验证",
+            canonical_url="https://www.news.cn/politics/existing.html",
+            publisher="新华社",
+            published_at=datetime(2026, 7, 30, tzinfo=UTC),
+            content_text=content,
+            content_hash=hashlib.sha256(content.encode()).hexdigest(),
+            webfetch_artifact_id="existing-artifact",
+            first_crawled_at=datetime(2026, 7, 31, tzinfo=UTC),
+            last_crawled_at=datetime(2026, 7, 31, tzinfo=UTC),
+        )
+        database.add(policy)
+        database.flush()
+        return policy.id
+
+
+def select_version():
+    from sqlalchemy import text
+
+    return text("SELECT version_num FROM alembic_version")

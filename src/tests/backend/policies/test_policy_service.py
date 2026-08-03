@@ -171,6 +171,115 @@ def test_policy_write_forbids_extra_fields() -> None:
         PolicyWrite.model_validate(payload)
 
 
+@pytest.mark.parametrize("field", ["title", "publisher", "content_hash", "webfetch_artifact_id"])
+@pytest.mark.parametrize("unsafe_character", ["\u0085", "\u202e", "\u2066", "\u2069", "\u200b"])
+def test_policy_write_metadata_rejects_all_control_and_format_characters(
+    field: str,
+    unsafe_character: str,
+) -> None:
+    payload = article_record(1, 1).model_dump(mode="python")
+    payload["canonical_url"] = str(payload["canonical_url"])
+    payload[field] = f"safe{unsafe_character}value"
+
+    with pytest.raises(ValidationError):
+        PolicyWrite.model_validate(payload)
+
+
+def test_policy_write_content_allows_normal_line_breaks_and_tabs() -> None:
+    content = "第一行\n第二行\r\n\t缩进"
+
+    record = article_record(1, 1, content_text=content)
+
+    assert record.content_text == content
+
+
+@pytest.mark.parametrize(
+    "unsafe_character",
+    ["\x00", "\u0085", "\u202e", "\u2066", "\u2069", "\u200b"],
+)
+def test_policy_write_content_rejects_other_control_and_all_format_characters(
+    unsafe_character: str,
+) -> None:
+    payload = article_record(1, 1).model_dump(mode="python")
+    payload["canonical_url"] = str(payload["canonical_url"])
+    payload["content_text"] = f"正文{unsafe_character}内容"
+
+    with pytest.raises(ValidationError):
+        PolicyWrite.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "invalid_hash",
+    [
+        "A" * 64,
+        "a" * 63,
+        "a" * 65,
+        "g" * 64,
+        hashlib.sha256(b"different-content").hexdigest(),
+    ],
+)
+def test_policy_write_requires_exact_lowercase_sha256_of_content(invalid_hash: str) -> None:
+    payload = article_record(1, 1).model_dump(mode="python")
+    payload["canonical_url"] = str(payload["canonical_url"])
+    payload["content_hash"] = invalid_hash
+
+    with pytest.raises(ValidationError):
+        PolicyWrite.model_validate(payload)
+
+
+@pytest.mark.parametrize("construction", ["model_copy", "model_construct"])
+def test_forged_same_hash_for_different_content_is_rejected_before_deduplication(
+    policy_catalog: tuple[sessionmaker[Session], int, int, int, tuple[int, ...]],
+    construction: str,
+) -> None:
+    sessions, source_id, category_id, _economy_id, item_ids = policy_catalog
+    service = PolicyService(sessions)
+    original = article_record(source_id, category_id)
+    stored = service.upsert(original, task_item_id=item_ids[0])
+    updates = {
+        "canonical_url": "https://www.news.cn/politics/20260730/forged.html",
+        "content_text": "完全不同的伪造正文。",
+    }
+    if construction == "model_copy":
+        forged = original.model_copy(update=updates)
+    else:
+        forged_payload = original.model_dump(mode="python")
+        forged_payload.update(updates)
+        forged = PolicyWrite.model_construct(**forged_payload)
+
+    with pytest.raises(PolicyWriteError) as raised:
+        service.upsert(forged, task_item_id=item_ids[1])
+
+    assert raised.value.code == "POLICY_WRITE_INVALID"
+    with sessions() as database:
+        assert database.scalar(select(func.count()).select_from(Policy)) == 1
+        assert database.get(Policy, stored.policy_id).content_text == original.content_text  # type: ignore[union-attr]
+
+
+def test_policy_query_bounds_page_before_building_sqlite_offset() -> None:
+    assert PolicyQuery(page=1_000_000, page_size=1).page == 1_000_000
+    assert PolicyQuery(page=1, page_size=10_000).page_size == 10_000
+
+    with pytest.raises(ValidationError):
+        PolicyQuery(page=1_000_001, page_size=1)
+    with pytest.raises(ValidationError):
+        PolicyQuery(page=10**100, page_size=1)
+    with pytest.raises(ValidationError):
+        PolicyQuery(page=1, page_size=10_001)
+    with pytest.raises(ValidationError):
+        PolicyQuery(page=1, page_size=10**100)
+
+
+@pytest.mark.parametrize("field", ["keyword", "publisher"])
+@pytest.mark.parametrize("unsafe_character", ["\u0085", "\u202e", "\u2066", "\u2069", "\u200b"])
+def test_policy_query_text_rejects_all_control_and_format_characters(
+    field: str,
+    unsafe_character: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        PolicyQuery(**{field: f"政策{unsafe_character}查询"})
+
+
 def test_policy_service_accepts_only_policy_write_and_positive_task_item(
     policy_catalog: tuple[sessionmaker[Session], int, int, int, tuple[int, ...]],
 ) -> None:

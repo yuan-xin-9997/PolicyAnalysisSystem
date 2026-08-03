@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import unicodedata
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -21,8 +24,13 @@ from policy_analysis.sources.url_validation import normalized_http_hostname
 PositiveId = Annotated[int, Field(strict=True, ge=1)]
 BoundedTitle = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 BoundedPublisher = Annotated[str, StringConstraints(min_length=1, max_length=256)]
-BoundedHash = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+BoundedHash = Annotated[
+    str,
+    StringConstraints(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+]
 BoundedArtifactId = Annotated[str, StringConstraints(min_length=1, max_length=256)]
+MAX_POLICY_PAGE = 1_000_000
+MAX_POLICY_PAGE_SIZE = 10_000
 
 
 class StrictModel(BaseModel):
@@ -48,14 +56,14 @@ class PolicyWrite(StrictModel):
     @field_validator("title", "publisher", "content_hash", "webfetch_artifact_id")
     @classmethod
     def reject_ambiguous_bounded_strings(cls, value: str) -> str:
-        if value != value.strip() or any(_is_control(character) for character in value):
+        if value != value.strip() or any(_is_unsafe_metadata_character(char) for char in value):
             raise ValueError("字符串值必须为无控制字符的规范文本")
         return value
 
     @field_validator("content_text")
     @classmethod
     def validate_plain_content(cls, value: str) -> str:
-        if not value.strip() or "\x00" in value:
+        if not value.strip() or any(_is_unsafe_content_character(char) for char in value):
             raise ValueError("正文必须为非空纯文本")
         return value
 
@@ -64,7 +72,7 @@ class PolicyWrite(StrictModel):
     def validate_canonical_url_input(cls, value: object) -> object:
         if not isinstance(value, str) or value != value.strip() or len(value) > 2048:
             raise ValueError("canonical_url 必须是规范 URL 字符串")
-        if any(character == "\\" or _is_control(character) for character in value):
+        if any(_is_unsafe_url_character(character) for character in value):
             raise ValueError("canonical_url 包含歧义字符")
         try:
             parsed = urlsplit(value)
@@ -95,6 +103,16 @@ class PolicyWrite(StrictModel):
             raise ValueError("时间值必须包含时区信息")
         return value.astimezone(UTC)
 
+    @model_validator(mode="after")
+    def validate_content_hash(self) -> PolicyWrite:
+        try:
+            expected = hashlib.sha256(self.content_text.encode("utf-8")).hexdigest()
+        except UnicodeEncodeError:
+            raise ValueError("正文必须是有效的 UTF-8 文本") from None
+        if not hmac.compare_digest(self.content_hash, expected):
+            raise ValueError("content_hash 必须是正文的 SHA-256 摘要")
+        return self
+
 
 class PolicyQuery(StrictModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -107,8 +125,8 @@ class PolicyQuery(StrictModel):
     publisher: Annotated[str, StringConstraints(min_length=1, max_length=256)] | None = None
     category_id: PositiveId | None = None
     source_id: PositiveId | None = None
-    page: PositiveId = 1
-    page_size: Annotated[int, Field(strict=True, ge=1)] = 50
+    page: Annotated[int, Field(strict=True, ge=1, le=MAX_POLICY_PAGE)] = 1
+    page_size: Annotated[int, Field(strict=True, ge=1, le=MAX_POLICY_PAGE_SIZE)] = 50
     sort_by: Literal["published_at", "last_crawled_at"] = "published_at"
     sort_order: Literal["asc", "desc"] = "desc"
 
@@ -116,7 +134,7 @@ class PolicyQuery(StrictModel):
     @classmethod
     def reject_untrimmed_query_text(cls, value: str | None) -> str | None:
         if value is not None and (
-            value != value.strip() or any(_is_control(character) for character in value)
+            value != value.strip() or any(_is_unsafe_metadata_character(character) for character in value)
         ):
             raise ValueError("查询文本必须为规范文本")
         return value
@@ -172,8 +190,8 @@ class PolicyPage(StrictModel):
 
     items: list[PolicyListItem]
     total: int = Field(ge=0)
-    page: int = Field(ge=1)
-    page_size: int = Field(ge=1)
+    page: int = Field(ge=1, le=MAX_POLICY_PAGE)
+    page_size: int = Field(ge=1, le=MAX_POLICY_PAGE_SIZE)
     sort_by: Literal["published_at", "last_crawled_at"]
     sort_order: Literal["asc", "desc"]
 
@@ -185,6 +203,14 @@ class PolicyUpsertResult(StrictModel):
     outcome: Literal["stored", "duplicate", "updated"]
 
 
-def _is_control(character: str) -> bool:
-    codepoint = ord(character)
-    return codepoint < 0x20 or codepoint == 0x7F
+def _is_unsafe_metadata_character(character: str) -> bool:
+    return unicodedata.category(character) in {"Cc", "Cf"}
+
+
+def _is_unsafe_content_character(character: str) -> bool:
+    category = unicodedata.category(character)
+    return category == "Cf" or (category == "Cc" and character not in "\n\r\t")
+
+
+def _is_unsafe_url_character(character: str) -> bool:
+    return character == "\\" or unicodedata.category(character) in {"Cc", "Cf"}

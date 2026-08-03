@@ -11,7 +11,13 @@ from pydantic import ValidationError
 from policy_analysis.auth.permissions import PageCode, require_page
 from policy_analysis.auth.service import PublicUser
 from policy_analysis.core.errors import APIError
-from policy_analysis.policies.schemas import PolicyDetail, PolicyPage, PolicyQuery
+from policy_analysis.policies.schemas import (
+    MAX_POLICY_PAGE,
+    MAX_POLICY_PAGE_SIZE,
+    PolicyDetail,
+    PolicyPage,
+    PolicyQuery,
+)
 from policy_analysis.policies.service import PolicyService
 
 router = APIRouter(prefix="/api/v1/policies", tags=["policies"])
@@ -51,8 +57,8 @@ def list_policies(
     publisher: Annotated[str | None, Query(max_length=256)] = None,
     category_id: Annotated[int | None, Query(ge=1)] = None,
     source_id: Annotated[int | None, Query(ge=1)] = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int | None, Query(ge=1)] = None,
+    page: Annotated[int, Query(ge=1, le=MAX_POLICY_PAGE)] = 1,
+    page_size: Annotated[int | None, Query(ge=1, le=MAX_POLICY_PAGE_SIZE)] = None,
     sort_by: Literal["published_at", "last_crawled_at"] = "published_at",
     sort_order: Literal["asc", "desc"] = "desc",
     _user: PublicUser = Depends(require_policies_page),
