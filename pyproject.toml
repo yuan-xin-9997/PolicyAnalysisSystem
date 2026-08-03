@@ -30,6 +30,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src/app/backend"]
 
+[tool.setuptools.package-data]
+"policy_analysis.collectors.resources" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["src/tests/backend"]
 addopts = "-ra"
