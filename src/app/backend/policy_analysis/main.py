@@ -17,6 +17,7 @@ from policy_analysis.auth.service import AuthService, UserAdministrationService,
 from policy_analysis.core.database import build_engine, create_schema, session_factory
 from policy_analysis.core.errors import install_error_handlers
 from policy_analysis.core.settings import AppSettings, load_settings, load_settings_snapshot
+from policy_analysis.policies.routes import router as policies_router
 from policy_analysis.settings.routes import router as settings_router
 from policy_analysis.sources.routes import router as sources_router
 from policy_analysis.system.routes import health_router, resolve_build_metadata
@@ -101,6 +102,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(settings_router)
+    app.include_router(policies_router)
     app.include_router(sources_router)
     app.include_router(system_router)
     app.include_router(health_router)
