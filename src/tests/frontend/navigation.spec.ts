@@ -198,7 +198,17 @@ describe('权限导航', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'admin', role: 'admin', pages: [] }
     auth.csrfToken = 'logout-token'
-    const fetchMock = vi.fn().mockImplementation(responseFactory)
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/policies')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 20 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return responseFactory()
+    })
     vi.stubGlobal('fetch', fetchMock)
     const router = createPolicyRouter(pinia, createMemoryHistory())
     await router.push('/policies')
@@ -210,7 +220,7 @@ describe('权限导航', () => {
     await waitFor(() => expect(router.currentRoute.value.path).toBe('/login'))
     expect(auth.user).toBeNull()
     expect(auth.csrfToken).toBe('')
-    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/auth/logout')).toHaveLength(1)
   })
 
   it('退出请求进行中禁用按钮并阻止重复提交', async () => {
@@ -219,11 +229,19 @@ describe('权限导航', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'admin', role: 'admin', pages: [] }
     let resolveLogout!: (response: Response) => void
-    const fetchMock = vi.fn().mockReturnValue(
-      new Promise<Response>((resolve) => {
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/policies')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 20 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return new Promise<Response>((resolve) => {
         resolveLogout = resolve
-      }),
-    )
+      })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const router = createPolicyRouter(pinia, createMemoryHistory())
     await router.push('/policies')
@@ -234,7 +252,7 @@ describe('权限导航', () => {
     await fireEvent.click(button)
     expect(button).toBeDisabled()
     await fireEvent.click(button)
-    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/auth/logout')).toHaveLength(1)
 
     resolveLogout(new Response(null, { status: 204 }))
     await waitFor(() => expect(router.currentRoute.value.path).toBe('/login'))

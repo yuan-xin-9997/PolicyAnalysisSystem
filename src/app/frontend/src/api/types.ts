@@ -25,31 +25,25 @@ export interface CurrentUser {
 export interface PolicySummary {
   id: number
   title: string
+  canonical_url: string
   publisher: string
+  category: PolicyReference
+  source: PolicyReference
   published_at: string
-  source_name: string
-  category_name: string
+  first_crawled_at: string
   last_crawled_at: string
+  content_hash: string
+  latest_task_id: number | null
 }
 
 export interface PolicyDetail extends PolicySummary {
-  canonical_url: string
   content_text: string
-  revisions: PolicyRevision[]
-  references: PolicyReference[]
-}
-
-export interface PolicyRevision {
-  id: number
-  crawled_at: string
-  content_hash: string
-  webfetch_artifact_id: string
 }
 
 export interface PolicyReference {
-  task_id: number
-  task_item_id: number
-  reason_code: string | null
+  id: number
+  code: string
+  name: string
 }
 
 export type TaskStatus =
