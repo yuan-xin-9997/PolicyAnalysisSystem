@@ -123,7 +123,7 @@ EOF
                     set -eu
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
                     cd "${DEPLOY_DIR}"
-                    nohup .venv/bin/uvicorn policy_analysis.main:app \
+                    JENKINS_NODE_COOKIE=dontKillMe BUILD_ID=dontKillMe nohup .venv/bin/uvicorn policy_analysis.main:app \
                         --app-dir src/app/backend \
                         --host "${APP_HOST}" \
                         --port "${APP_PORT}" \
