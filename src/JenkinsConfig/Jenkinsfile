@@ -95,6 +95,9 @@ EOF
         }
 
         stage('Install and build') {
+            options {
+                timeout(time: 20, unit: 'MINUTES')
+            }
             steps {
                 sh '''
                     set -eu
@@ -104,8 +107,8 @@ EOF
                     if [ ! -d .venv ]; then
                         "${PYTHON_BIN}" -m venv .venv
                     fi
-                    .venv/bin/pip install --upgrade pip
-                    .venv/bin/pip install -e .
+                    .venv/bin/pip install --timeout 30 --retries 5 --upgrade pip
+                    .venv/bin/pip install --timeout 30 --retries 5 -e .
 
                     npm --prefix src/app/frontend ci
                     npm --prefix src/app/frontend run build
