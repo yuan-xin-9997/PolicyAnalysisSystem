@@ -135,6 +135,35 @@ describe('API 客户端', () => {
     )
   })
 
+  it('保留查询数组并返回完整分页结构', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [{ id: 1, title: '中共中央政治局召开会议' }],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await apiRequest('/policies', {
+      query: { keyword: '政治局', publisher: ['新华社', '新华网'], page: 1, empty: null },
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/v1/policies?keyword=%E6%94%BF%E6%B2%BB%E5%B1%80&publisher=%E6%96%B0%E5%8D%8E%E7%A4%BE&publisher=%E6%96%B0%E5%8D%8E%E7%BD%91&page=1',
+    )
+    expect(page).toEqual({
+      items: [{ id: 1, title: '中共中央政治局召开会议' }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+    })
+  })
+
   it('删除调用方提供的 CSRF header，仅允许客户端策略写入', async () => {
     const fetchMock = vi
       .fn()

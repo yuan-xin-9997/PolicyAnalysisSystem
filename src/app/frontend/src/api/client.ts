@@ -1,9 +1,4 @@
-export interface ApiErrorBody {
-  code: string
-  message: string
-  request_id: string
-  details: Record<string, unknown>
-}
+import type { ApiErrorBody } from './types'
 
 interface ApiErrorEnvelope {
   error?: Partial<ApiErrorBody>
@@ -27,6 +22,9 @@ export class ApiError extends Error {
 
 type CsrfTokenProvider = () => string | undefined
 type UnauthorizedHandler = () => void | Promise<void>
+type QueryValue = string | number | boolean | null | undefined
+type Query = Record<string, QueryValue | QueryValue[]>
+export type ApiRequestOptions = RequestInit & { query?: Query }
 const API_PREFIX = '/api/v1'
 const URL_VALIDATION_ORIGIN = 'https://policy-api.invalid'
 
@@ -41,11 +39,12 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
   unauthorizedHandler = handler
 }
 
-export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const normalizedPath = normalizeApiPath(path)
+export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const { query, ...requestOptions } = options
+  const normalizedPath = normalizeApiPath(path, query)
 
-  const method = (options.method || 'GET').toUpperCase()
-  const headers = new Headers(options.headers)
+  const method = (requestOptions.method || 'GET').toUpperCase()
+  const headers = new Headers(requestOptions.headers)
   headers.delete('X-CSRF-Token')
   if (options.body != null && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -58,7 +57,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   }
 
   const response = await fetch(`${API_PREFIX}${normalizedPath.requestPath}`, {
-    ...options,
+    ...requestOptions,
     method,
     headers,
     credentials: 'include',
@@ -86,13 +85,13 @@ interface NormalizedApiPath {
   pathname: string
 }
 
-function normalizeApiPath(path: string): NormalizedApiPath {
+function normalizeApiPath(path: string, query?: Query): NormalizedApiPath {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('#')) {
     throw new TypeError('API path must be an application-relative path')
   }
   const queryIndex = path.indexOf('?')
   const rawPathname = queryIndex >= 0 ? path.slice(0, queryIndex) : path
-  const query = queryIndex >= 0 ? path.slice(queryIndex) : ''
+  const rawSearch = queryIndex >= 0 ? path.slice(queryIndex) : ''
   let decodedPathname = rawPathname
 
   for (let depth = 0; depth < 5; depth += 1) {
@@ -104,10 +103,8 @@ function normalizeApiPath(path: string): NormalizedApiPath {
       throw new TypeError('API path contains invalid encoding')
     }
     if (next === decodedPathname) {
-      const normalizedUrl = new URL(
-        `${API_PREFIX}${rawPathname}${query}`,
-        URL_VALIDATION_ORIGIN,
-      )
+      const normalizedUrl = new URL(`${API_PREFIX}${rawPathname}${rawSearch}`, URL_VALIDATION_ORIGIN)
+      appendQuery(normalizedUrl.searchParams, query)
       if (
         normalizedUrl.origin !== URL_VALIDATION_ORIGIN ||
         !normalizedUrl.pathname.startsWith(`${API_PREFIX}/`)
@@ -136,6 +133,17 @@ function validateDecodedPath(pathname: string): void {
     pathname.split('/').some((segment) => segment === '.' || segment === '..')
   ) {
     throw new TypeError('API path escapes the application API prefix')
+  }
+}
+
+function appendQuery(searchParams: URLSearchParams, query?: Query): void {
+  if (!query) return
+  for (const [key, rawValue] of Object.entries(query)) {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue]
+    for (const value of values) {
+      if (value === null || value === undefined) continue
+      searchParams.append(key, String(value))
+    }
   }
 }
 
