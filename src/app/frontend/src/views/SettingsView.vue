@@ -6,7 +6,7 @@ import { ApiError, apiRequest } from '../api/client'
 interface SettingsResponse {
   values: Record<string, unknown>
   sources: Record<string, 'default' | 'config_file' | 'environment'>
-  webfetch: { status: 'configured' | 'not_configured'; checked: boolean }
+  webfetch: { status: 'ready' | 'unavailable' | 'configured' | 'not_configured'; checked: boolean }
 }
 
 interface SettingRow {
@@ -72,6 +72,15 @@ function sourceLabel(source: SettingsResponse['sources'][string] | undefined): s
   return { default: '默认值', config_file: '配置文件', environment: '环境变量' }[source || 'default']
 }
 
+function webfetchLabel(status: SettingsResponse['webfetch']['status']): string {
+  return {
+    ready: '可用',
+    unavailable: '不可用',
+    configured: '已配置',
+    not_configured: '未配置',
+  }[status]
+}
+
 function formatValue(value: unknown): string {
   if (value === null) return 'null'
   if (typeof value === 'string') return value || '（空）'
@@ -92,8 +101,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
         <h1 id="settings-title">系统配置</h1>
         <p>只读展示配置文件、环境变量覆盖和默认值共同形成的生效配置。</p>
       </div>
-      <span v-if="response" class="status-pill" :class="{ muted: response.webfetch.status !== 'configured' }">
-        WebFetch {{ response.webfetch.status === 'configured' ? '已配置' : '未配置' }}
+      <span v-if="response" class="status-pill" :class="{ muted: !['ready', 'configured'].includes(response.webfetch.status) }">
+        WebFetch {{ webfetchLabel(response.webfetch.status) }}
       </span>
     </header>
 

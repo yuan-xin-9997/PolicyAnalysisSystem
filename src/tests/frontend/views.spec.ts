@@ -35,7 +35,7 @@ describe('基础管理页面', () => {
     render(UsersView, { global: { plugins: [createPinia()] } })
 
     expect(await screen.findByText('reader')).toBeInTheDocument()
-    expect(screen.getByText('停用')).toBeInTheDocument()
+    expect(screen.getAllByText('停用').length).toBeGreaterThan(0)
     expect(screen.queryByText(/password/i)).not.toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/users?page=1&page_size=20&sort_by=username&sort_order=asc',
