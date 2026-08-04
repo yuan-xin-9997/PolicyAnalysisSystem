@@ -35,7 +35,7 @@ def system_info(
         "health": {
             "live": "ok",
             "database": database_status,
-            "task_executor": "not_configured",
+            "task_executor": _worker_status(request),
         },
     }
 
@@ -48,14 +48,17 @@ def live() -> dict[str, str]:
 @health_router.get("/ready")
 def ready(request: Request) -> JSONResponse:
     database_status = _database_status(request)
-    ready_status = database_status == "ok"
+    worker_status = _worker_status(request)
+    scheduler_status = _scheduler_status(request)
+    ready_status = database_status == "ok" and worker_status == "started"
     return JSONResponse(
         status_code=200 if ready_status else 503,
         content={
             "status": "ready" if ready_status else "not_ready",
             "checks": {
                 "database": {"status": database_status},
-                "task_executor": {"status": "not_configured"},
+                "task_executor": {"status": worker_status},
+                "scheduler": {"status": scheduler_status},
             },
         },
     )
@@ -95,3 +98,17 @@ def _database_status(request: Request) -> str:
     except Exception:
         return "error"
     return "ok"
+
+
+def _worker_status(request: Request) -> str:
+    worker = getattr(request.app.state, "task_worker", None)
+    if worker is None:
+        return "not_configured"
+    return "started" if worker.is_started else "stopped"
+
+
+def _scheduler_status(request: Request) -> str:
+    scheduler = getattr(request.app.state, "task_scheduler", None)
+    if scheduler is None:
+        return "not_configured"
+    return "started" if scheduler.is_started else "stopped"

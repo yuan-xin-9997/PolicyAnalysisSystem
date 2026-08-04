@@ -17,14 +17,21 @@ from sqlalchemy import Engine
 from policy_analysis.auth.routes import router as auth_router
 from policy_analysis.auth.routes import users_router
 from policy_analysis.auth.service import AuthService, UserAdministrationService, UserSyncService
+from policy_analysis.collectors.webfetch import WebFetchClient
 from policy_analysis.core.database import build_engine, session_factory
 from policy_analysis.core.errors import install_error_handlers
 from policy_analysis.core.settings import AppSettings, load_settings, load_settings_snapshot
 from policy_analysis.policies.routes import router as policies_router
+from policy_analysis.policies.service import PolicyService
 from policy_analysis.settings.routes import router as settings_router
 from policy_analysis.sources.routes import router as sources_router
 from policy_analysis.system.routes import health_router, resolve_build_metadata
 from policy_analysis.system.routes import router as system_router
+from policy_analysis.tasks.repository import TaskRepository
+from policy_analysis.tasks.routes import router as tasks_router
+from policy_analysis.tasks.runner import TaskRunner
+from policy_analysis.tasks.scheduler import TaskScheduler
+from policy_analysis.tasks.worker import TaskWorker
 
 _APPLICATION_ROOT = Path(__file__).resolve().parents[4]
 _MIGRATION_LOCK = RLock()
@@ -56,6 +63,8 @@ def create_app(
         engine: Engine | None = None
         owns_runtime = app.state.auth_service is None
         try:
+            task_worker: TaskWorker | None = None
+            task_scheduler: TaskScheduler | None = None
             snapshot = load_settings_snapshot(
                 resolved_config_path,
                 resolved_project_root,
@@ -78,8 +87,20 @@ def create_app(
                 app.state.user_administration_service = _administration_service_for(service)
                 if owns_runtime:
                     service.user_sync.sync_if_changed()
+                TaskRepository(service.sessions).recover_interrupted(datetime_now_utc())
+                task_worker = _build_task_worker(service.sessions, snapshot.settings)
+                task_scheduler = TaskScheduler(service.sessions)
+                task_scheduler.set_worker_wakeup(task_worker.submit_next)
+                app.state.task_worker = task_worker
+                app.state.task_scheduler = task_scheduler
+                task_worker.start()
+                task_scheduler.start()
             yield
         finally:
+            if task_scheduler is not None:
+                task_scheduler.shutdown(wait=False)
+            if task_worker is not None:
+                task_worker.shutdown(wait=True)
             if owns_runtime:
                 app.state.settings = None
                 app.state.settings_sources = None
@@ -88,6 +109,8 @@ def create_app(
                 app.state.auth_service = None
                 app.state.user_administration_service = None
                 app.state.database_sessions = None
+                app.state.task_worker = None
+                app.state.task_scheduler = None
             if owns_runtime and engine is not None:
                 engine.dispose()
 
@@ -101,6 +124,8 @@ def create_app(
     app.state.settings_sources = None
     app.state.version_environment = resolved_environment
     app.state.build_metadata = None
+    app.state.task_worker = None
+    app.state.task_scheduler = None
     app.state.project_root = resolved_project_root
     app.state.frontend_dist = resolved_frontend_dist
     install_error_handlers(app)
@@ -109,10 +134,47 @@ def create_app(
     app.include_router(settings_router)
     app.include_router(policies_router)
     app.include_router(sources_router)
+    app.include_router(tasks_router)
     app.include_router(system_router)
     app.include_router(health_router)
     _install_spa_routes(app, resolved_frontend_dist)
     return app
+
+
+def datetime_now_utc():
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
+def _build_task_worker(sessions, settings: AppSettings) -> TaskWorker:
+    if not settings.webfetch.base_url.strip() or not settings.webfetch.api_key.get_secret_value().strip():
+        return TaskWorker(
+            sessions,
+            max_workers=settings.tasks.max_workers,
+        )
+
+    def runner_factory():
+        webfetch = WebFetchClient(
+            settings.webfetch.base_url,
+            settings.webfetch.api_key.get_secret_value(),
+            timeout_seconds=settings.webfetch.timeout_seconds,
+            max_attempts=settings.tasks.retry_attempts,
+        )
+        policy_service = PolicyService(sessions)
+        runner = TaskRunner(
+            sessions,
+            webfetch,
+            policy_service,
+            secrets=(settings.webfetch.api_key.get_secret_value(),),
+        )
+        return runner.run_claimed
+
+    return TaskWorker(
+        sessions,
+        runner_factory=runner_factory,
+        max_workers=settings.tasks.max_workers,
+    )
 
 
 def _resolve_factory_path(project_root: Path, value: Path | None, *, default: Path) -> Path:

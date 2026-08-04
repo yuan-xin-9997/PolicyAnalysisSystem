@@ -53,6 +53,16 @@ def rule_payload(**overrides: object) -> dict[str, object]:
 
 
 def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient) -> None:
+    class FakeScheduler:
+        is_started = True
+
+        def __init__(self) -> None:
+            self.synced = 0
+
+        def sync_jobs(self) -> None:
+            self.synced += 1
+
+    admin_client.app.state.task_scheduler = FakeScheduler()
     categories = admin_client.get("/api/v1/policy-categories")
     sources = admin_client.get("/api/v1/sources")
     assert categories.status_code == sources.status_code == 200
@@ -85,6 +95,7 @@ def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient)
         headers=csrf(admin_client),
     )
     assert scheduled.status_code == 201
+    assert admin_client.app.state.task_scheduler.synced == 1
     assert scheduled.json()["is_active"] is False
     assert scheduled.json()["next_run_at"] is None
     schedule_id = scheduled.json()["id"]
@@ -95,6 +106,7 @@ def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient)
         headers=csrf(admin_client),
     )
     assert enabled.status_code == 200
+    assert admin_client.app.state.task_scheduler.synced == 2
     assert enabled.json()["is_active"] is True
     assert enabled.json()["timezone"] == "Asia/Shanghai"
     assert enabled.json()["next_run_at"].endswith(("Z", "+00:00"))

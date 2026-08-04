@@ -91,6 +91,10 @@ class TaskRunner:
         status = self._repository.claim(task_id, now)
         if status is not TaskStatus.RUNNING:
             return TaskRunResult(task_id, status)
+        return self.run_claimed(task_id)
+
+    def run_claimed(self, task_id: int) -> TaskRunResult:
+        now = self._aware_now()
         try:
             task, rule, seeds = self._repository.load_context(task_id)
             config = _resolve_config(task.request_snapshot_json, rule, seeds)

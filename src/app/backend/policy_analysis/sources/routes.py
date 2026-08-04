@@ -117,7 +117,9 @@ def create_schedule(
     service: SourceService = Depends(get_source_service),
 ) -> ScheduleRead:
     _reject_query_parameters(request)
-    return service.create_schedule(payload)
+    result = service.create_schedule(payload)
+    _sync_task_scheduler(request)
+    return result
 
 
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleRead)
@@ -129,4 +131,12 @@ def update_schedule(
     service: SourceService = Depends(get_source_service),
 ) -> ScheduleRead:
     _reject_query_parameters(request)
-    return service.update_schedule(schedule_id, payload)
+    result = service.update_schedule(schedule_id, payload)
+    _sync_task_scheduler(request)
+    return result
+
+
+def _sync_task_scheduler(request: Request) -> None:
+    scheduler = getattr(request.app.state, "task_scheduler", None)
+    if scheduler is not None and scheduler.is_started:
+        scheduler.sync_jobs()

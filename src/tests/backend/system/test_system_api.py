@@ -25,7 +25,7 @@ def test_system_info_uses_injected_build_metadata_and_beijing_time(
     assert payload["health"] == {
         "live": "ok",
         "database": "ok",
-        "task_executor": "not_configured",
+        "task_executor": "started",
     }
 
 
@@ -41,7 +41,7 @@ def test_live_is_anonymous_lightweight_and_does_not_add_wildcard_cors(client: Te
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_ready_runs_real_sqlite_query_and_reports_executor_not_configured(
+def test_ready_runs_real_sqlite_query_and_reports_started_executor(
     client: TestClient,
     database_sessions: sessionmaker[Session],
     auth_app,
@@ -55,7 +55,8 @@ def test_ready_runs_real_sqlite_query_and_reports_executor_not_configured(
         "status": "ready",
         "checks": {
             "database": {"status": "ok"},
-            "task_executor": {"status": "not_configured"},
+            "task_executor": {"status": "started"},
+            "scheduler": {"status": "started"},
         },
     }
 
@@ -77,7 +78,8 @@ def test_ready_returns_safe_503_when_sqlite_query_fails(
         "status": "not_ready",
         "checks": {
             "database": {"status": "error"},
-            "task_executor": {"status": "not_configured"},
+            "task_executor": {"status": "started"},
+            "scheduler": {"status": "started"},
         },
     }
     assert "database-secret-must-not-leak" not in response.text

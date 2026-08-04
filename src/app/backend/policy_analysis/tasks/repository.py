@@ -7,13 +7,14 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import PurePath
+from threading import RLock
 from typing import Any
 from urllib.parse import unquote
 
-from sqlalchemy import select, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
-from policy_analysis.sources.models import CollectionRule, SeedUrl
+from policy_analysis.sources.models import CollectionRule, Schedule, SeedUrl
 from policy_analysis.tasks.models import CrawlTask, CrawlTaskItem, CrawlTaskLog, TaskItemStatus, TaskStatus
 from policy_analysis.tasks.schemas import TaskRequestSnapshot
 from policy_analysis.tasks.state import transition
@@ -46,6 +47,7 @@ _LOCAL_PATH = re.compile(r"(?m)(^|[=\s(:'\"])(/[^\r\n,;)'\"]*)")
 _MAX_DEPTH = 12
 _MAX_ITEMS = 100
 _MAX_STRING = 4096
+_SCHEDULE_LOCK = RLock()
 
 
 class TaskRepositoryError(RuntimeError):
@@ -62,6 +64,15 @@ class TaskRepository:
     def get(self, task_id: int) -> CrawlTask | None:
         with self._sessions() as session:
             return session.get(CrawlTask, task_id)
+
+    def list_tasks(self, *, offset: int = 0, limit: int = 50) -> tuple[list[CrawlTask], int]:
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(CrawlTask)) or 0
+            tasks = list(
+                session.scalars(select(CrawlTask).order_by(CrawlTask.id.desc()).offset(offset).limit(limit))
+            )
+            session.expunge_all()
+            return tasks, total
 
     def create_task(
         self,
@@ -139,6 +150,99 @@ class TaskRepository:
             raise TaskRepositoryError("TASK_CREATE_FAILED", "采集任务创建失败。")
         return stored
 
+    def create_scheduled_task_once(
+        self,
+        schedule_id: int,
+        scheduled_for: datetime,
+        now: datetime,
+    ) -> CrawlTask | None:
+        scheduled_for = _utc(scheduled_for)
+        with _SCHEDULE_LOCK:
+            with self._sessions() as session:
+                schedule = session.get(Schedule, schedule_id)
+                if schedule is None or not schedule.is_active:
+                    return None
+                existing = session.scalar(
+                    select(CrawlTask.id).where(
+                        CrawlTask.trigger_type == "schedule",
+                        CrawlTask.rule_id == schedule.rule_id,
+                        CrawlTask.scheduled_for == scheduled_for,
+                    )
+                )
+                rule_id = schedule.rule_id
+            if existing is not None:
+                return None
+            created = self.create_task(
+                rule_id,
+                "schedule",
+                {"kind": "schedule"},
+                now,
+                scheduled_for=scheduled_for,
+            )
+            with self._sessions.begin() as session:
+                schedule = session.get(Schedule, schedule_id)
+                if schedule is not None:
+                    schedule.last_run_at = scheduled_for
+            return created
+
+    def claim_next(self, now: datetime) -> int | None:
+        now = _utc(now)
+        with self._sessions.begin() as session:
+            running = aliased(CrawlTask)
+            candidate = session.scalar(
+                select(CrawlTask)
+                .where(
+                    CrawlTask.status == TaskStatus.PENDING.value,
+                    ~select(running.id)
+                    .where(
+                        running.status == TaskStatus.RUNNING.value,
+                        running.rule_id == CrawlTask.rule_id,
+                    )
+                    .exists(),
+                )
+                .order_by(CrawlTask.id)
+            )
+            if candidate is None:
+                return None
+            claimed = session.execute(
+                update(CrawlTask)
+                .where(
+                    CrawlTask.id == candidate.id,
+                    CrawlTask.status == TaskStatus.PENDING.value,
+                    ~select(running.id)
+                    .where(
+                        running.status == TaskStatus.RUNNING.value,
+                        running.rule_id == candidate.rule_id,
+                    )
+                    .exists(),
+                )
+                .values(status=TaskStatus.RUNNING.value, started_at=now)
+            ).rowcount
+            return candidate.id if claimed == 1 else None
+
+    def recover_interrupted(self, now: datetime) -> list[int]:
+        now = _utc(now)
+        with self._sessions.begin() as session:
+            task_ids = list(
+                session.scalars(
+                    select(CrawlTask.id)
+                    .where(CrawlTask.status == TaskStatus.RUNNING.value)
+                    .order_by(CrawlTask.id)
+                )
+            )
+            if not task_ids:
+                return []
+            session.execute(
+                update(CrawlTask)
+                .where(CrawlTask.id.in_(task_ids))
+                .values(
+                    status=TaskStatus.FAILED.value,
+                    finished_at=now,
+                    error_summary="服务异常中断",
+                )
+            )
+            return task_ids
+
     def claim(self, task_id: int, now: datetime) -> TaskStatus:
         with self._sessions.begin() as session:
             task = session.get(CrawlTask, task_id)
@@ -207,6 +311,73 @@ class TaskRepository:
                 and task.cancel_requested_at is None
             ):
                 task.cancel_requested_at = _utc(now)
+
+    def list_logs(self, task_id: int, *, offset: int = 0, limit: int = 50) -> tuple[list[CrawlTaskLog], int]:
+        with self._sessions() as session:
+            total = (
+                session.scalar(
+                    select(func.count()).select_from(CrawlTaskLog).where(CrawlTaskLog.task_id == task_id)
+                )
+                or 0
+            )
+            logs = list(
+                session.scalars(
+                    select(CrawlTaskLog)
+                    .where(CrawlTaskLog.task_id == task_id)
+                    .order_by(CrawlTaskLog.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+            session.expunge_all()
+            return logs, total
+
+    def list_items(
+        self, task_id: int, *, offset: int = 0, limit: int = 50
+    ) -> tuple[list[CrawlTaskItem], int]:
+        with self._sessions() as session:
+            total = (
+                session.scalar(
+                    select(func.count()).select_from(CrawlTaskItem).where(CrawlTaskItem.task_id == task_id)
+                )
+                or 0
+            )
+            items = list(
+                session.scalars(
+                    select(CrawlTaskItem)
+                    .where(CrawlTaskItem.task_id == task_id)
+                    .order_by(CrawlTaskItem.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+            session.expunge_all()
+            return items, total
+
+    def due_schedules(self, now: datetime) -> list[Schedule]:
+        now = _utc(now)
+        with self._sessions() as session:
+            schedules = list(
+                session.scalars(
+                    select(Schedule)
+                    .where(
+                        Schedule.is_active.is_(True),
+                        Schedule.next_run_at.is_not(None),
+                        Schedule.next_run_at <= now,
+                    )
+                    .order_by(Schedule.id)
+                )
+            )
+            session.expunge_all()
+            return schedules
+
+    def enabled_schedules(self) -> list[Schedule]:
+        with self._sessions() as session:
+            schedules = list(
+                session.scalars(select(Schedule).where(Schedule.is_active.is_(True)).order_by(Schedule.id))
+            )
+            session.expunge_all()
+            return schedules
 
     def create_item(self, task_id: int, candidate_url: str, normalized_url: str, now: datetime) -> int:
         with self._sessions.begin() as session:

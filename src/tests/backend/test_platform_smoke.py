@@ -104,7 +104,7 @@ def test_platform_authentication_and_permissions_smoke_flow(
         assert system_payload["health"] == {
             "live": "ok",
             "database": "ok",
-            "task_executor": "not_configured",
+            "task_executor": "started",
         }
 
         effective_settings = client.get("/api/v1/settings/effective")
