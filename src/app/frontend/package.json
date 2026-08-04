@@ -10,9 +10,9 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "type-check": "vue-tsc -b",
-    "lint": "cd ../.. && app/frontend/node_modules/.bin/eslint --config app/frontend/eslint.config.js app/frontend/src tests/frontend app/frontend/vite.config.ts app/frontend/vitest.config.ts",
+    "lint": "cd ../.. && app/frontend/node_modules/.bin/eslint --config app/frontend/eslint.config.js app/frontend/src tests/frontend app/frontend/e2e app/frontend/vite.config.ts app/frontend/vitest.config.ts app/frontend/playwright.config.ts",
     "test": "vitest",
-    "test:e2e": "node -e \"console.error('Playwright E2E tests are not implemented; no browser tests ran.'); process.exit(1)\""
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/vue": "^8.1.0",
     "@types/node": "^24.3.0",

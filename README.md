@@ -101,9 +101,10 @@ npm --prefix src/app/frontend run type-check
 npm --prefix src/app/frontend run lint
 npm --prefix src/app/frontend run test -- --run
 npm --prefix src/app/frontend run build
+npm --prefix src/app/frontend run test:e2e
 ```
 
-浏览器端到端测试尚未实现；当前 `test:e2e` 脚本会明确返回非零状态，因此不属于本阶段的通过项。
+`test:e2e` 使用 Playwright 启动 Vite 开发服务器，并通过浏览器网络拦截模拟安全的后端测试数据，覆盖管理员登录、主导航、政策检索、政策详情纯文本展示、手工触发采集任务和任务详情日志等主路径。
 
 ## 政策采集后端
 

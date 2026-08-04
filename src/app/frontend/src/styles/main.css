@@ -8,9 +8,9 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input { font: inherit; }
-button, a, input { outline-offset: 3px; }
-button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #d49a42; }
+button, input, select, textarea { font: inherit; }
+button, a, input, select, textarea { outline-offset: 3px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #d49a42; }
 
 .app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 32px; padding: 28px 20px 20px; color: #f7f3e8; background: #153c32; }
@@ -48,6 +48,23 @@ tbody tr:last-child td { border-bottom: 0; }
 code { color: #27614f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .placeholder-panel { min-height: 420px; display: flex; flex-direction: column; justify-content: center; }
 .planning-badge { margin-top: 26px; color: #8b5b19; background: #fff0d2; }
+.filter-grid, .form-card { display: grid; gap: 16px; margin-bottom: 24px; }
+.filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+.form-card { padding: 18px; border: 1px solid #e1e7e2; border-radius: 16px; background: #f8faf8; }
+.form-card h2 { margin: 0; color: #153c32; font: 700 22px/1.2 ui-serif, Georgia, "Songti SC", serif; }
+label, fieldset { display: grid; gap: 7px; color: #34473f; font-size: 13px; font-weight: 700; }
+fieldset { border: 1px solid #dce3dc; border-radius: 12px; padding: 12px; }
+input, select, textarea { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid #cbd4cf; border-radius: 9px; color: #17221d; background: #fff; }
+textarea { min-height: 90px; resize: vertical; }
+button { min-height: 38px; padding: 0 13px; border: 1px solid #cbd4cf; border-radius: 9px; color: #153c32; background: #fff; cursor: pointer; }
+button:hover:not(:disabled) { border-color: #27614f; background: #f3f7f4; }
+button:disabled { cursor: not-allowed; opacity: .62; }
+.filter-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.checkbox-line { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; font-weight: 500; }
+.checkbox-line input { width: auto; min-height: auto; }
+.inline-form { display: grid; gap: 8px; min-width: 180px; margin-top: 10px; }
+.policy-content { white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px; border-radius: 14px; color: #1f2f28; background: #f6f8f6; line-height: 1.8; }
+.pagination { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 20px; }
 
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); align-items: center; gap: clamp(40px, 8vw, 120px); padding: clamp(28px, 7vw, 96px); background: radial-gradient(circle at 12% 20%, #315f50 0, #153c32 35%, #0e2e27 68%); }
 .login-intro { max-width: 660px; color: #f8f4e8; }
