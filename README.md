@@ -1,6 +1,6 @@
 # PolicyAnalysisSystem
 
-PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策采集与分析系统。当前平台阶段已完成登录、服务端会话、页面权限导航、权限管理只读列表、脱敏后的系统配置展示，以及任务中心、政策库、推送和分析页面的占位入口。政策采集、任务执行、政策检索和完整的用户管理交互将在后续阶段实现。
+PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策采集与分析系统。当前后端已完成登录、权限、配置展示、来源规则、采集任务、WebFetch 抓取、政策去重入库、全文检索和任务调度能力。
 
 ## 本地开发
 
@@ -35,6 +35,7 @@ npm --prefix src/app/frontend ci
 
 ```bash
 export POLICY_ANALYSIS_AUTH__SESSION_SECRET='replace-with-a-long-random-session-secret'
+export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://127.0.0.1:33333'
 export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
 ```
 
@@ -103,3 +104,23 @@ npm --prefix src/app/frontend run build
 ```
 
 浏览器端到端测试尚未实现；当前 `test:e2e` 脚本会明确返回非零状态，因此不属于本阶段的通过项。
+
+## 政策采集后端
+
+采集后端通过 WebFetch 服务获取 RSS、栏目页面和文章正文。运行前需要配置：
+
+```bash
+export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://your-webfetch-service'
+export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
+```
+
+管理员登录后，在任务中心相关 API 中维护来源、采集规则和定时计划。首次回填建议流程：
+
+1. 创建或确认来源、政策类别和采集规则；
+2. 先使用 `POST /api/v1/tasks` 手工触发一次回填；
+3. 通过 `GET /api/v1/tasks/{task_id}` 查看终态和进度；
+4. 通过 `GET /api/v1/tasks/{task_id}/items` 查看每篇候选文章的处理结果；
+5. 通过 `GET /api/v1/tasks/{task_id}/logs` 查看采集日志和失败原因；
+6. 确认政策库检索结果正确后，再启用对应定时计划。
+
+常见失败会记录为稳定的 `reason_code`，例如标题未命中、正文过短、超出回填窗口、来源非官方、重复政策或 WebFetch 临时不可用。任务调度使用单进程 worker 和 APScheduler；`/health/ready` 会在 SQLite 可用且 worker 已启动时返回就绪。

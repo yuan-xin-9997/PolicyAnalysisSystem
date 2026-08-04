@@ -65,8 +65,13 @@ class TaskWorker:
 
     def _run(self, task_id: int) -> object:
         runner = self._runner_factory()
+        repository = TaskRepository(self._sessions)
+        repository.add_log(task_id, "info", "任务开始执行。")
         try:
-            return runner(task_id)
+            result = runner(task_id)
+            status = getattr(getattr(result, "status", None), "value", None)
+            repository.add_log(task_id, "info", "任务执行结束。", {"status": status or "unknown"})
+            return result
         finally:
             self.submit_next()
 
