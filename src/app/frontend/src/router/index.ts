@@ -15,6 +15,8 @@ import PlaceholderView from '../views/PlaceholderView.vue'
 import PolicyDetailView from '../views/policies/PolicyDetailView.vue'
 import PolicyListView from '../views/policies/PolicyListView.vue'
 import SettingsView from '../views/SettingsView.vue'
+import TaskDetailView from '../views/tasks/TaskDetailView.vue'
+import TaskListView from '../views/tasks/TaskListView.vue'
 import UsersView from '../views/UsersView.vue'
 
 declare module 'vue-router' {
@@ -37,7 +39,14 @@ const routes: RouteRecordRaw[] = [
         props: true,
         meta: { page: 'policies' },
       },
-      { path: 'tasks', name: 'tasks', component: PlaceholderView, props: { page: 'tasks' }, meta: { page: 'tasks' } },
+      { path: 'tasks', name: 'tasks', component: TaskListView, meta: { page: 'tasks' } },
+      {
+        path: 'tasks/:taskId',
+        name: 'task-detail',
+        component: TaskDetailView,
+        props: true,
+        meta: { page: 'tasks' },
+      },
       { path: 'push', name: 'push', component: PlaceholderView, props: { page: 'push' }, meta: { page: 'push' } },
       { path: 'analysis', name: 'analysis', component: PlaceholderView, props: { page: 'analysis' }, meta: { page: 'analysis' } },
       { path: 'users', name: 'users', component: UsersView, meta: { page: 'users' } },
