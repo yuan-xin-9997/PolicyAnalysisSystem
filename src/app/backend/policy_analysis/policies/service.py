@@ -47,66 +47,10 @@ class PolicyService:
         self._now = now or (lambda: datetime.now(UTC))
 
     def upsert(self, record: PolicyWrite, task_item_id: int) -> PolicyUpsertResult:
-        if type(record) is not PolicyWrite:
-            raise TypeError("record must be PolicyWrite")
-        if isinstance(task_item_id, bool) or not isinstance(task_item_id, int) or task_item_id < 1:
-            raise ValueError("task_item_id must be a positive integer")
-        record = _revalidate_record(record)
-
+        record = _validated_upsert_input(record, task_item_id)
         try:
             with _WRITE_LOCK, self._sessions.begin() as session:
-                repository = PolicyRepository(session)
-                if not repository.references_exist(record.source_id, record.category_id, task_item_id):
-                    raise _reference_error()
-                canonical_url = str(record.canonical_url)
-                policy = repository.get_by_source_url(record.source_id, canonical_url)
-                if policy is None:
-                    policy = repository.get_by_source_hash(record.source_id, record.content_hash)
-                if policy is None:
-                    policy = Policy(
-                        source_id=record.source_id,
-                        category_id=record.category_id,
-                        title=record.title,
-                        canonical_url=canonical_url,
-                        publisher=record.publisher,
-                        published_at=record.published_at,
-                        content_text=record.content_text,
-                        content_hash=record.content_hash,
-                        webfetch_artifact_id=record.webfetch_artifact_id,
-                        first_crawled_at=record.crawled_at,
-                        last_crawled_at=record.crawled_at,
-                    )
-                    repository.add_policy(policy)
-                    session.flush()
-                    return PolicyUpsertResult(policy_id=policy.id, outcome="stored")
-
-                if policy.content_hash == record.content_hash:
-                    if record.crawled_at > policy.last_crawled_at:
-                        policy.last_crawled_at = record.crawled_at
-                        session.flush()
-                    return PolicyUpsertResult(policy_id=policy.id, outcome="duplicate")
-
-                repository.add_revision(
-                    PolicyRevision(
-                        policy_id=policy.id,
-                        content_text=policy.content_text,
-                        content_hash=policy.content_hash,
-                        webfetch_artifact_id=policy.webfetch_artifact_id,
-                        replaced_at=self._aware_now(),
-                        task_item_id=task_item_id,
-                    )
-                )
-                policy.category_id = record.category_id
-                policy.title = record.title
-                policy.publisher = record.publisher
-                policy.published_at = record.published_at
-                policy.content_text = record.content_text
-                policy.content_hash = record.content_hash
-                policy.webfetch_artifact_id = record.webfetch_artifact_id
-                policy.last_crawled_at = max(policy.last_crawled_at, record.crawled_at)
-                policy.updated_at = self._aware_now()
-                session.flush()
-                return PolicyUpsertResult(policy_id=policy.id, outcome="updated")
+                return self._upsert(session, record, task_item_id)
         except PolicyWriteError:
             raise
         except IntegrityError:
@@ -119,6 +63,85 @@ class PolicyService:
                 "POLICY_WRITE_FAILED",
                 "政策写入暂时失败。",
             ) from None
+
+    def upsert_and_finalize(
+        self,
+        record: PolicyWrite,
+        task_item_id: int,
+        finalize: Callable[[Session, PolicyUpsertResult], None],
+    ) -> PolicyUpsertResult:
+        """Hold the process write lock through finalization and transaction commit."""
+        if not callable(finalize):
+            raise TypeError("finalize must be callable")
+        record = _validated_upsert_input(record, task_item_id)
+        try:
+            with _WRITE_LOCK, self._sessions.begin() as session:
+                result = self._upsert(session, record, task_item_id)
+                try:
+                    finalize(session, result)
+                except SQLAlchemyError:
+                    raise PolicyWriteError("POLICY_WRITE_FAILED", "政策写入暂时失败。") from None
+                return result
+        except PolicyWriteError:
+            raise
+        except IntegrityError:
+            raise PolicyWriteError("POLICY_WRITE_CONFLICT", "政策写入发生冲突，请重试。") from None
+        except SQLAlchemyError:
+            raise PolicyWriteError("POLICY_WRITE_FAILED", "政策写入暂时失败。") from None
+
+    def _upsert(self, session: Session, record: PolicyWrite, task_item_id: int) -> PolicyUpsertResult:
+        repository = PolicyRepository(session)
+        if not repository.references_exist(record.source_id, record.category_id, task_item_id):
+            raise _reference_error()
+        canonical_url = str(record.canonical_url)
+        policy = repository.get_by_source_url(record.source_id, canonical_url)
+        if policy is None:
+            policy = repository.get_by_source_hash(record.source_id, record.content_hash)
+        if policy is None:
+            policy = Policy(
+                source_id=record.source_id,
+                category_id=record.category_id,
+                title=record.title,
+                canonical_url=canonical_url,
+                publisher=record.publisher,
+                published_at=record.published_at,
+                content_text=record.content_text,
+                content_hash=record.content_hash,
+                webfetch_artifact_id=record.webfetch_artifact_id,
+                first_crawled_at=record.crawled_at,
+                last_crawled_at=record.crawled_at,
+            )
+            repository.add_policy(policy)
+            session.flush()
+            return PolicyUpsertResult(policy_id=policy.id, outcome="stored")
+
+        if policy.content_hash == record.content_hash:
+            if record.crawled_at > policy.last_crawled_at:
+                policy.last_crawled_at = record.crawled_at
+                session.flush()
+            return PolicyUpsertResult(policy_id=policy.id, outcome="duplicate")
+
+        repository.add_revision(
+            PolicyRevision(
+                policy_id=policy.id,
+                content_text=policy.content_text,
+                content_hash=policy.content_hash,
+                webfetch_artifact_id=policy.webfetch_artifact_id,
+                replaced_at=self._aware_now(),
+                task_item_id=task_item_id,
+            )
+        )
+        policy.category_id = record.category_id
+        policy.title = record.title
+        policy.publisher = record.publisher
+        policy.published_at = record.published_at
+        policy.content_text = record.content_text
+        policy.content_hash = record.content_hash
+        policy.webfetch_artifact_id = record.webfetch_artifact_id
+        policy.last_crawled_at = max(policy.last_crawled_at, record.crawled_at)
+        policy.updated_at = self._aware_now()
+        session.flush()
+        return PolicyUpsertResult(policy_id=policy.id, outcome="updated")
 
     def search(self, query: PolicyQuery) -> PolicyPage:
         with self._sessions() as session:
@@ -186,3 +209,11 @@ def _revalidate_record(record: PolicyWrite) -> PolicyWrite:
         return PolicyWrite.model_validate(payload)
     except ValidationError:
         raise PolicyWriteError("POLICY_WRITE_INVALID", "政策写入数据无效。") from None
+
+
+def _validated_upsert_input(record: PolicyWrite, task_item_id: int) -> PolicyWrite:
+    if type(record) is not PolicyWrite:
+        raise TypeError("record must be PolicyWrite")
+    if isinstance(task_item_id, bool) or not isinstance(task_item_id, int) or task_item_id < 1:
+        raise ValueError("task_item_id must be a positive integer")
+    return _revalidate_record(record)
