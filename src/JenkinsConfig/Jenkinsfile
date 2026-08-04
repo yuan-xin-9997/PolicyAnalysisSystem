@@ -1,0 +1,147 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    triggers {
+        pollSCM('H/30 * * * *')
+    }
+
+    environment {
+        DEPLOY_ROOT = '/opt'
+        APP_NAME = 'PolicyAnalysisSystem'
+        APP_HOST = '0.0.0.0'
+        APP_PORT = '30080'
+        PYTHON_BIN = 'python3.12'
+        PID_FILE = 'src/logs/server.pid'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Stop current service') {
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    if [ -f "${DEPLOY_DIR}/${PID_FILE}" ]; then
+                        PID="$(cat "${DEPLOY_DIR}/${PID_FILE}" || true)"
+                        if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
+                            kill "${PID}" || true
+                            for i in $(seq 1 20); do
+                                if kill -0 "${PID}" 2>/dev/null; then
+                                    sleep 1
+                                else
+                                    break
+                                fi
+                            done
+                            if kill -0 "${PID}" 2>/dev/null; then
+                                kill -9 "${PID}" || true
+                            fi
+                        fi
+                        rm -f "${DEPLOY_DIR}/${PID_FILE}"
+                    fi
+                '''
+            }
+        }
+
+        stage('Update deployment files') {
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    mkdir -p "${DEPLOY_DIR}"
+
+                    if [ -f "${DEPLOY_DIR}/src/config/app.json" ]; then
+                        cp "${DEPLOY_DIR}/src/config/app.json" /tmp/policy-analysis-app.json
+                    fi
+                    if [ -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
+                        cp "${DEPLOY_DIR}/src/data/password.txt" /tmp/policy-analysis-password.txt
+                    fi
+
+                    rsync -a --delete \
+                        --exclude '.git/' \
+                        --exclude '.venv/' \
+                        --exclude 'src/data/app.sqlite3' \
+                        --exclude 'src/data/password.txt' \
+                        --exclude 'src/logs/' \
+                        "${WORKSPACE}/" "${DEPLOY_DIR}/"
+
+                    mkdir -p "${DEPLOY_DIR}/src/config" "${DEPLOY_DIR}/src/data" "${DEPLOY_DIR}/src/logs"
+                    if [ -f /tmp/policy-analysis-app.json ]; then
+                        mv /tmp/policy-analysis-app.json "${DEPLOY_DIR}/src/config/app.json"
+                    fi
+                    if [ -f /tmp/policy-analysis-password.txt ]; then
+                        mv /tmp/policy-analysis-password.txt "${DEPLOY_DIR}/src/data/password.txt"
+                    elif [ ! -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
+                        cat > "${DEPLOY_DIR}/src/data/password.txt" <<'EOF'
+# 格式: username:password:role  (role 取值: admin | user)
+# admin 默认拥有所有页面权限；user 的可见页面由管理员在权限管理页配置。
+# 修改本文件后，新用户在下次登录时会自动同步到数据库。
+admin:admin123:admin
+EOF
+                        chmod 600 "${DEPLOY_DIR}/src/data/password.txt"
+                    fi
+                '''
+            }
+        }
+
+        stage('Install and build') {
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    cd "${DEPLOY_DIR}"
+
+                    if [ ! -d .venv ]; then
+                        "${PYTHON_BIN}" -m venv .venv
+                    fi
+                    .venv/bin/pip install --upgrade pip
+                    .venv/bin/pip install -e .
+
+                    npm --prefix src/app/frontend ci
+                    npm --prefix src/app/frontend run build
+                    .venv/bin/alembic upgrade head
+                '''
+            }
+        }
+
+        stage('Start service') {
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    cd "${DEPLOY_DIR}"
+                    nohup .venv/bin/uvicorn policy_analysis.main:app \
+                        --app-dir src/app/backend \
+                        --host "${APP_HOST}" \
+                        --port "${APP_PORT}" \
+                        > src/logs/app.log 2>&1 &
+                    echo "$!" > "${PID_FILE}"
+                    sleep 3
+                    curl -fsS "http://127.0.0.1:${APP_PORT}/health/ready"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''
+                set +e
+                DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                if [ -f "${DEPLOY_DIR}/src/logs/app.log" ]; then
+                    tail -n 100 "${DEPLOY_DIR}/src/logs/app.log"
+                fi
+            '''
+        }
+    }
+}
