@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
+import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TaskDetailView from '../../app/frontend/src/views/tasks/TaskDetailView.vue'
 import TaskListView from '../../app/frontend/src/views/tasks/TaskListView.vue'
+import { useAuthStore } from '../../app/frontend/src/stores/auth'
 
 function jsonResponse(body: object, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -35,6 +37,9 @@ function taskPage(overrides: object = {}) {
 }
 
 async function renderList() {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useAuthStore().user = { id: 1, username: 'admin', role: 'admin', pages: [] }
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -43,7 +48,7 @@ async function renderList() {
     ],
   })
   await router.push('/tasks')
-  return render(TaskListView, { global: { plugins: [router] } })
+  return render(TaskListView, { global: { plugins: [pinia, router] } })
 }
 
 describe('任务列表', () => {

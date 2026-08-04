@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError, apiRequest } from '../../api/client'
 import type { CrawlTask, Page, TaskStatus } from '../../api/types'
 import StatusTag from '../../components/StatusTag.vue'
+import { useAuthStore } from '../../stores/auth'
 import { formatBeijingTime } from '../../utils/time'
 
+const auth = useAuthStore()
+const router = useRouter()
+const isAdmin = computed(() => auth.user?.role === 'admin')
 const filters = reactive({
   status: '',
   ruleId: '',
@@ -17,7 +21,9 @@ const filters = reactive({
   pageSize: 20,
 })
 const loading = ref(true)
+const triggering = ref(false)
 const errorMessage = ref('')
+const triggerRuleId = ref('')
 const tasks = ref<CrawlTask[]>([])
 const total = ref(0)
 
@@ -64,6 +70,24 @@ async function changePage(page: number): Promise<void> {
   filters.page = page
   await loadTasks()
 }
+
+async function triggerManualTask(): Promise<void> {
+  if (!triggerRuleId.value || triggering.value) return
+  if (!window.confirm('将立即创建手工采集任务。是否继续？')) return
+  triggering.value = true
+  errorMessage.value = ''
+  try {
+    const task = await apiRequest<CrawlTask>('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ rule_id: Number(triggerRuleId.value) }),
+    })
+    await router.push({ name: 'task-detail', params: { taskId: task.id } })
+  } catch (error) {
+    errorMessage.value = error instanceof ApiError ? error.message : '手工触发失败。'
+  } finally {
+    triggering.value = false
+  }
+}
 </script>
 
 <template>
@@ -73,7 +97,20 @@ async function changePage(page: number): Promise<void> {
         <span class="eyebrow">TASK CENTER</span>
         <h1 id="tasks-title">任务中心</h1>
       </div>
+      <div class="filter-actions">
+        <RouterLink to="/tasks/rules">采集规则</RouterLink>
+        <RouterLink to="/tasks/schedules">定时计划</RouterLink>
+      </div>
     </div>
+
+    <form v-if="isAdmin" class="form-card" aria-label="手工触发采集" @submit.prevent="triggerManualTask">
+      <h2>手工触发</h2>
+      <label>
+        手工规则 ID
+        <input v-model="triggerRuleId" name="manual_rule_id" inputmode="numeric" />
+      </label>
+      <button type="submit" :disabled="triggering || !triggerRuleId">{{ triggering ? '触发中…' : '触发采集' }}</button>
+    </form>
 
     <form class="filter-grid" aria-label="任务筛选" @submit.prevent="submitFilters">
       <label>

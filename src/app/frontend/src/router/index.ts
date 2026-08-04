@@ -15,6 +15,8 @@ import PlaceholderView from '../views/PlaceholderView.vue'
 import PolicyDetailView from '../views/policies/PolicyDetailView.vue'
 import PolicyListView from '../views/policies/PolicyListView.vue'
 import SettingsView from '../views/SettingsView.vue'
+import RuleListView from '../views/tasks/RuleListView.vue'
+import ScheduleListView from '../views/tasks/ScheduleListView.vue'
 import TaskDetailView from '../views/tasks/TaskDetailView.vue'
 import TaskListView from '../views/tasks/TaskListView.vue'
 import UsersView from '../views/UsersView.vue'
@@ -40,6 +42,8 @@ const routes: RouteRecordRaw[] = [
         meta: { page: 'policies' },
       },
       { path: 'tasks', name: 'tasks', component: TaskListView, meta: { page: 'tasks' } },
+      { path: 'tasks/rules', name: 'task-rules', component: RuleListView, meta: { page: 'tasks' } },
+      { path: 'tasks/schedules', name: 'task-schedules', component: ScheduleListView, meta: { page: 'tasks' } },
       {
         path: 'tasks/:taskId',
         name: 'task-detail',
