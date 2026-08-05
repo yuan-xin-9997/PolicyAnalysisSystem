@@ -129,6 +129,30 @@ def test_admin_creates_lists_reads_cancels_and_pages_task_logs(
     assert cancelled.json()["cancel_requested_at"] is not None
 
 
+def test_manual_task_creation_fails_fast_when_worker_cannot_run(
+    admin_client: TestClient,
+    auth_app,
+    rule_id: int,
+) -> None:
+    class UnconfiguredWorker:
+        is_started = True
+        can_run_tasks = False
+
+        def submit_next(self) -> None:  # pragma: no cover - must not be called
+            raise AssertionError("未配置执行器时不得创建并唤醒任务")
+
+    auth_app.state.task_worker = UnconfiguredWorker()
+
+    response = admin_client.post(
+        "/api/v1/tasks",
+        json={"rule_id": rule_id},
+        headers=csrf(admin_client),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "TASK_EXECUTOR_UNAVAILABLE"
+
+
 def test_task_api_permissions_and_csrf(
     client: TestClient,
     admin_client: TestClient,

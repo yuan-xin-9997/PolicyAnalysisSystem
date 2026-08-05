@@ -36,6 +36,10 @@ class TaskWorker:
     def is_started(self) -> bool:
         return self._executor is not None
 
+    @property
+    def can_run_tasks(self) -> bool:
+        return self._runner_factory is not None
+
     def start(self) -> None:
         with self._lock:
             if self._executor is None:

@@ -54,6 +54,7 @@ def create_task(
     admin: PublicUser = Depends(require_admin_csrf),
     repository: TaskRepository = Depends(get_task_repository),
 ) -> dict[str, object]:
+    _require_runnable_worker(request)
     try:
         task = repository.create_task(
             payload.rule_id,
@@ -195,6 +196,21 @@ def _wake_worker(request: Request) -> None:
     worker = getattr(request.app.state, "task_worker", None)
     if worker is not None and worker.is_started:
         worker.submit_next()
+
+
+def _require_runnable_worker(request: Request) -> None:
+    worker = getattr(request.app.state, "task_worker", None)
+    unavailable = (
+        worker is None
+        or not getattr(worker, "is_started", False)
+        or not getattr(worker, "can_run_tasks", True)
+    )
+    if unavailable:
+        raise APIError(
+            status_code=503,
+            code="TASK_EXECUTOR_UNAVAILABLE",
+            message="采集执行器不可用，请先配置 WebFetch 服务后再触发采集。",
+        )
 
 
 __all__ = ["router"]

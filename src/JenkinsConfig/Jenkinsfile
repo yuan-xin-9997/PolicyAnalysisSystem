@@ -123,6 +123,11 @@ EOF
                     set -eu
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
                     cd "${DEPLOY_DIR}"
+                    if [ -f service.env ]; then
+                        set -a
+                        . ./service.env
+                        set +a
+                    fi
                     JENKINS_NODE_COOKIE=dontKillMe BUILD_ID=dontKillMe nohup .venv/bin/uvicorn policy_analysis.main:app \
                         --app-dir src/app/backend \
                         --host "${APP_HOST}" \
