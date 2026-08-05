@@ -22,9 +22,10 @@ from policy_analysis.main import create_app
 from policy_analysis.policies.models import Policy
 from policy_analysis.policies.schemas import PolicyWrite
 from policy_analysis.policies.service import PolicyService
-from policy_analysis.sources.models import CollectionRule, PolicyCategory, Source
+from policy_analysis.sources.bootstrap import load_seed_manifest
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, SeedUrl, Source
 from policy_analysis.tasks.models import CrawlTask, CrawlTaskItem
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -208,6 +209,48 @@ def test_default_first_startup_migrates_to_head_and_supports_long_chinese_search
     assert database_path.is_file()
     assert not unrelated_database.exists()
     assert os.environ["POLICY_ANALYSIS_DATABASE__PATH"] == str(unrelated_database)
+
+
+def test_default_startup_bootstraps_xinhua_politburo_rule_and_seed_urls(
+    tmp_path: Path,
+) -> None:
+    config_path, _database_path = _write_default_runtime_files(tmp_path)
+    app = create_app(
+        project_root=tmp_path,
+        config_path=config_path.relative_to(tmp_path),
+        environment={},
+    )
+
+    with _test_client(app) as client:
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert login.status_code == 200
+        response = client.get("/api/v1/collection-rules")
+        assert response.status_code == 200
+        assert [item["name"] for item in response.json()] == ["中央政治局会议"]
+
+        with app.state.database_sessions() as database:
+            category = database.scalar(
+                select(PolicyCategory).where(PolicyCategory.code == "politburo_meeting")
+            )
+            source = database.scalar(select(Source).where(Source.code == "xinhua"))
+            rule = database.scalar(select(CollectionRule).where(CollectionRule.name == "中央政治局会议"))
+            assert category is not None
+            assert category.name == "中央政治局会议"
+            assert source is not None
+            assert source.name == "新华网"
+            assert rule is not None
+            assert rule.history_years == 5
+            assert json.loads(rule.include_keywords_json) == ["中共中央政治局召开会议"]
+            assert database.scalar(
+                select(func.count()).select_from(SeedUrl).where(SeedUrl.rule_id == rule.id)
+            ) == len(load_seed_manifest())
+
+    with _test_client(app), app.state.database_sessions() as database:
+        assert database.scalar(select(func.count()).select_from(CollectionRule)) == 1
+        assert database.scalar(select(func.count()).select_from(SeedUrl)) == len(load_seed_manifest())
 
 
 def test_runtime_migration_serializes_concurrent_upgrades_of_same_database(tmp_path: Path) -> None:

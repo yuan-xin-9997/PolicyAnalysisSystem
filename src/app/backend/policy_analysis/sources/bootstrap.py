@@ -11,7 +11,10 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import TypeAdapter, ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, Source
 from policy_analysis.sources.schemas import SeedImportResult, SeedUrlImport
 from policy_analysis.sources.service import SourceService
 from policy_analysis.sources.url_validation import normalized_http_hostname
@@ -25,6 +28,16 @@ _LATEST_DATE = date(2026, 8, 1)
 _OLD_URL_DATE = re.compile(r"/(20\d{2})-(\d{2})/(\d{2})(?:/|$)")
 _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
 _MANIFEST_ADAPTER = TypeAdapter(list[SeedUrlImport])
+_DEFAULT_CATEGORY_CODE = "politburo_meeting"
+_DEFAULT_SOURCE_CODE = "xinhua"
+_DEFAULT_RULE_NAME = "中央政治局会议"
+_DEFAULT_INCLUDE_KEYWORDS = ["中共中央政治局召开会议"]
+_DEFAULT_EXCLUDE_KEYWORDS = ["视频"]
+_DEFAULT_DISCOVERY = {
+    "rss_urls": ["https://www.news.cn/rss/politics.xml"],
+    "channel_urls": ["https://www.news.cn/politics/leaders/index.htm"],
+}
+_DEFAULT_ALLOWED_DOMAINS = ["news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"]
 
 
 class SeedManifestError(ValueError):
@@ -56,11 +69,79 @@ def import_seed_manifest(
     return source_service.import_seed_urls(rule_id, entries)
 
 
+def bootstrap_default_catalog(sessions: sessionmaker[Session]) -> SeedImportResult:
+    """Ensure the first-phase Xinhua Politburo meeting scenario is visible and runnable."""
+
+    with sessions.begin() as session:
+        category = _ensure_default_category(session)
+        source = _ensure_default_source(session)
+        session.flush()
+        rule = _ensure_default_rule(session, source, category)
+        session.flush()
+        rule_id = rule.id
+    return import_seed_manifest(SourceService(sessions), rule_id)
+
+
 def _read_manifest(path: Path | None) -> bytes:
     if path is not None:
         return path.read_bytes().decode("utf-8").encode("utf-8")
     resource = resources.files(_RESOURCE_PACKAGE).joinpath(_RESOURCE_NAME)
     return resource.read_bytes().decode("utf-8").encode("utf-8")
+
+
+def _ensure_default_category(session: Session) -> PolicyCategory:
+    category = session.scalar(select(PolicyCategory).where(PolicyCategory.code == _DEFAULT_CATEGORY_CODE))
+    if category is None:
+        category = PolicyCategory(
+            code=_DEFAULT_CATEGORY_CODE,
+            name="中央政治局会议",
+            description="新华社中央政治局会议通报",
+            is_active=True,
+        )
+        session.add(category)
+    return category
+
+
+def _ensure_default_source(session: Session) -> Source:
+    source = session.scalar(select(Source).where(Source.code == _DEFAULT_SOURCE_CODE))
+    if source is None:
+        source = Source(
+            code=_DEFAULT_SOURCE_CODE,
+            name="新华网",
+            organization="新华社",
+            base_url="https://news.cn/",
+            adapter_type="xinhua",
+            allowed_domains_json=_encode_json(_DEFAULT_ALLOWED_DOMAINS),
+            is_active=True,
+        )
+        session.add(source)
+    return source
+
+
+def _ensure_default_rule(session: Session, source: Source, category: PolicyCategory) -> CollectionRule:
+    rule = session.scalar(
+        select(CollectionRule)
+        .where(CollectionRule.name == _DEFAULT_RULE_NAME)
+        .where(CollectionRule.source_id == source.id)
+        .where(CollectionRule.category_id == category.id)
+    )
+    if rule is None:
+        rule = CollectionRule(
+            source=source,
+            category=category,
+            name=_DEFAULT_RULE_NAME,
+            include_keywords_json=_encode_json(_DEFAULT_INCLUDE_KEYWORDS),
+            exclude_keywords_json=_encode_json(_DEFAULT_EXCLUDE_KEYWORDS),
+            history_years=5,
+            discovery_config_json=_encode_json(_DEFAULT_DISCOVERY),
+            is_active=True,
+        )
+        session.add(rule)
+    return rule
+
+
+def _encode_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_raw_manifest(payload: bytes) -> list[Any]:

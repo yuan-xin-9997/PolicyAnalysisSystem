@@ -24,6 +24,7 @@ from policy_analysis.core.settings import AppSettings, load_settings, load_setti
 from policy_analysis.policies.routes import router as policies_router
 from policy_analysis.policies.service import PolicyService
 from policy_analysis.settings.routes import router as settings_router
+from policy_analysis.sources.bootstrap import bootstrap_default_catalog
 from policy_analysis.sources.routes import router as sources_router
 from policy_analysis.system.routes import health_router, resolve_build_metadata
 from policy_analysis.system.routes import router as system_router
@@ -87,6 +88,7 @@ def create_app(
                 app.state.user_administration_service = _administration_service_for(service)
                 if owns_runtime:
                     service.user_sync.sync_if_changed()
+                    bootstrap_default_catalog(service.sessions)
                 TaskRepository(service.sessions).recover_interrupted(datetime_now_utc())
                 task_worker = _build_task_worker(service.sessions, snapshot.settings)
                 task_scheduler = TaskScheduler(service.sessions)

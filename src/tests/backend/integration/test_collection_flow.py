@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from policy_analysis.collectors.webfetch import WebFetchClient
 from policy_analysis.main import create_app
 from policy_analysis.sources.models import PolicyCategory, Source
+from sqlalchemy import select
 
 API_KEY = "integration-webfetch-key"
 ARTICLE_URL = "https://news.cn/politics/20260730/c.html"
@@ -118,14 +119,17 @@ def _create_rule(client: TestClient, csrf: dict[str, str]) -> int:
 
 def _seed_catalog(app) -> None:
     with app.state.database_sessions.begin() as database:
-        database.add_all(
-            [
+        if database.scalar(select(PolicyCategory).where(PolicyCategory.code == "politburo_meeting")) is None:
+            database.add(
                 PolicyCategory(
                     code="politburo_meeting",
                     name="中央政治局会议",
                     description="新华社中央政治局会议通报",
                     is_active=True,
-                ),
+                )
+            )
+        if database.scalar(select(Source).where(Source.code == "xinhua")) is None:
+            database.add(
                 Source(
                     code="xinhua",
                     name="新华网",
@@ -134,9 +138,8 @@ def _seed_catalog(app) -> None:
                     adapter_type="xinhua",
                     allowed_domains_json='["news.cn", "xinhuanet.com"]',
                     is_active=True,
-                ),
-            ]
-        )
+                )
+            )
 
 
 def _trigger_task(client: TestClient, csrf: dict[str, str], rule_id: int) -> int:
