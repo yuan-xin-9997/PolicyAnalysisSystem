@@ -70,6 +70,7 @@ pipeline {
                     rsync -a --delete \
                         --exclude '.git/' \
                         --exclude '.venv/' \
+                        --exclude 'service.env' \
                         --exclude 'src/data/app.sqlite3' \
                         --exclude 'src/data/password.txt' \
                         --exclude 'src/logs/' \
