@@ -11,3 +11,4 @@ def test_jenkinsfile_preserves_local_service_environment_file() -> None:
     assert "service.env" in jenkinsfile
     assert "--exclude 'service.env'" in jenkinsfile
     assert ". ./service.env" in jenkinsfile
+    assert "set +x" in jenkinsfile
