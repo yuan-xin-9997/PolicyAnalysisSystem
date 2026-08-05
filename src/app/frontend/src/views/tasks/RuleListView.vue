@@ -65,6 +65,7 @@ function upsertRule(rule: CollectionRule): void {
       <table class="data-table">
         <thead>
           <tr>
+            <th>ID</th>
             <th>规则</th>
             <th>来源</th>
             <th>类别</th>
@@ -77,6 +78,7 @@ function upsertRule(rule: CollectionRule): void {
         </thead>
         <tbody>
           <tr v-for="rule in rules" :key="rule.id">
+            <td>{{ rule.id }}</td>
             <td>{{ rule.name }}</td>
             <td>{{ rule.source.name }}</td>
             <td>{{ rule.category.name }}</td>
@@ -87,7 +89,7 @@ function upsertRule(rule: CollectionRule): void {
             <td>{{ formatBeijingTime(rule.updated_at) }}</td>
           </tr>
           <tr v-if="rules.length === 0">
-            <td colspan="8">暂无采集规则</td>
+            <td colspan="9">暂无采集规则</td>
           </tr>
         </tbody>
       </table>

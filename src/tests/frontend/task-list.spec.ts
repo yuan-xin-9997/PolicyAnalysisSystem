@@ -55,7 +55,10 @@ describe('任务列表', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('展示状态、筛选、分页和详情入口', async () => {
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(taskPage())))
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.endsWith('/collection-rules')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(taskPage()))
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     await renderList()
@@ -70,23 +73,49 @@ describe('任务列表', () => {
     await fireEvent.update(screen.getByLabelText('规则 ID'), '3')
     await fireEvent.update(screen.getByLabelText('触发方式'), 'manual')
     await fireEvent.click(screen.getByRole('button', { name: '筛选' }))
-    await waitFor(() => expect(fetchMock.mock.calls.at(-1)?.[0]).toContain('status=running&rule_id=3&trigger_type=manual'))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls
+          .map(([path]) => String(path))
+          .filter((path) => path.startsWith('/api/v1/tasks?'))
+          .at(-1),
+      ).toContain('status=running&rule_id=3&trigger_type=manual'),
+    )
 
     await fireEvent.click(screen.getByRole('button', { name: '下一页' }))
-    await waitFor(() => expect(fetchMock.mock.calls.at(-1)?.[0]).toContain('page=2'))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls
+          .map(([path]) => String(path))
+          .filter((path) => path.startsWith('/api/v1/tasks?'))
+          .at(-1),
+      ).toContain('page=2'),
+    )
   })
 
   it('展示空状态和 API 错误', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(taskPage({ items: [], total: 0 }))))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((path: string) => {
+        if (path.endsWith('/collection-rules')) return Promise.resolve(jsonResponse([]))
+        return Promise.resolve(jsonResponse(taskPage({ items: [], total: 0 })))
+      }),
+    )
     await renderList()
     expect(await screen.findByText('暂无任务')).toBeInTheDocument()
 
     vi.unstubAllGlobals()
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        jsonResponse({ error: { code: 'TASK_ERROR', message: '任务不可用。', request_id: 'id', details: {} } }, 503),
-      ),
+      vi.fn().mockImplementation((path: string) => {
+        if (path.endsWith('/collection-rules')) return Promise.resolve(jsonResponse([]))
+        return Promise.resolve(
+          jsonResponse(
+            { error: { code: 'TASK_ERROR', message: '任务不可用。', request_id: 'id', details: {} } },
+            503,
+          ),
+        )
+      }),
     )
     await renderList()
     expect(await screen.findByRole('alert')).toHaveTextContent('任务不可用。')

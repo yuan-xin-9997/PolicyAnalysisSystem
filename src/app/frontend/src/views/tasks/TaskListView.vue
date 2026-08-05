@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError, apiRequest } from '../../api/client'
-import type { CrawlTask, Page, TaskStatus } from '../../api/types'
+import type { CollectionRule, CrawlTask, Page, TaskStatus } from '../../api/types'
 import StatusTag from '../../components/StatusTag.vue'
 import { useAuthStore } from '../../stores/auth'
 import { formatBeijingTime } from '../../utils/time'
@@ -24,6 +24,7 @@ const loading = ref(true)
 const triggering = ref(false)
 const errorMessage = ref('')
 const triggerRuleId = ref('')
+const rules = ref<CollectionRule[]>([])
 const tasks = ref<CrawlTask[]>([])
 const total = ref(0)
 
@@ -41,9 +42,14 @@ async function loadTasks(): Promise<void> {
     if (filters.triggerType) query.trigger_type = filters.triggerType
     if (filters.startedFrom) query.started_from = filters.startedFrom
     if (filters.startedTo) query.started_to = filters.startedTo
-    const response = await apiRequest<Page<CrawlTask>>('/tasks', { query })
+    const [response, ruleItems] = await Promise.all([
+      apiRequest<Page<CrawlTask>>('/tasks', { query }),
+      isAdmin.value ? apiRequest<CollectionRule[]>('/collection-rules') : Promise.resolve(rules.value),
+    ])
     tasks.value = response.items
     total.value = response.total
+    rules.value = ruleItems
+    if (!triggerRuleId.value && rules.value.length === 1) triggerRuleId.value = String(rules.value[0].id)
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : '任务列表加载失败。'
   } finally {
@@ -106,8 +112,13 @@ async function triggerManualTask(): Promise<void> {
     <form v-if="isAdmin" class="form-card" aria-label="手工触发采集" @submit.prevent="triggerManualTask">
       <h2>手工触发</h2>
       <label>
-        手工规则 ID
-        <input v-model="triggerRuleId" name="manual_rule_id" inputmode="numeric" />
+        采集规则
+        <select v-model="triggerRuleId" name="manual_rule_id">
+          <option value="">请选择采集规则</option>
+          <option v-for="rule in rules" :key="rule.id" :value="String(rule.id)">
+            #{{ rule.id }} {{ rule.name }}
+          </option>
+        </select>
       </label>
       <button type="submit" :disabled="triggering || !triggerRuleId">{{ triggering ? '触发中…' : '触发采集' }}</button>
     </form>
