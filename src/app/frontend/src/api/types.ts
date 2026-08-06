@@ -46,6 +46,12 @@ export interface PolicyReference {
   name: string
 }
 
+export interface PolicyFilterOptions {
+  publishers: string[]
+  categories: PolicyReference[]
+  sources: PolicyReference[]
+}
+
 export type TaskStatus =
   | 'pending'
   | 'running'

@@ -14,13 +14,14 @@ describe('政策详情', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('以纯文本显示正文和来源元数据', async () => {
+    const content = '<script>window.hacked=true</script>政策正文\n\n第二段包含很长的无空格文本ABCDEFGHIJKLMN'
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         jsonResponse({
           id: 7,
           title: '中共中央政治局召开会议',
-          content_text: '<script>window.hacked=true</script>政策正文',
+          content_text: content,
           canonical_url: 'https://news.cn/example/c.html',
           publisher: '新华社',
           category: { id: 1, code: 'politburo_meeting', name: '中央政治局会议' },
@@ -37,10 +38,15 @@ describe('政策详情', () => {
     render(PolicyDetailView, { props: { policyId: 7 } })
 
     expect(await screen.findByRole('heading', { name: '中共中央政治局召开会议' })).toBeInTheDocument()
-    expect(screen.getByText('<script>window.hacked=true</script>政策正文')).toBeInTheDocument()
+    const contentRegion = screen.getByRole('region', { name: '政策正文' })
+    expect(contentRegion.querySelector('.policy-content')?.textContent).toBe(content)
+    expect(contentRegion.querySelector('pre')).toBeNull()
     expect(screen.getByText('新华社')).toBeInTheDocument()
+    expect(screen.getByText('新华网 · 中央政治局会议')).toBeInTheDocument()
     expect(screen.getByText('2026-07-30 14:00:00')).toBeInTheDocument()
     expect(document.querySelector('script')).toBeNull()
+    expect(document.querySelector('.policy-detail-header')).not.toBeNull()
+    expect(document.querySelector('.policy-actions')).not.toBeNull()
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute('rel', 'noopener noreferrer')
   })
 

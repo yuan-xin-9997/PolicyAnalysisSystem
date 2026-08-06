@@ -106,6 +106,25 @@ npm --prefix src/app/frontend run test:e2e
 
 `test:e2e` 使用 Playwright 启动 Vite 开发服务器，并通过浏览器网络拦截模拟安全的后端测试数据，覆盖管理员登录、主导航、政策检索、政策详情纯文本展示、手工触发采集任务和任务详情日志等主路径。
 
+## 政策数据库页面
+
+政策数据库为有 `policies` 页面权限的用户提供以下查询与阅读能力：
+
+- “标题关键词”仅在政策标题中执行包含匹配；
+- “正文全文检索”使用 SQLite FTS5 trigram 索引查询政策正文，一至二字短词使用安全的字面包含匹配；
+- 发布部门、政策类别和政策来源使用数据库中已有政策派生的下拉选项，不需要手工输入 ID；
+- 发布时间与最近抓取时间支持升序、降序切换，并明确显示“最早优先”或“最新优先”；
+- 所有筛选、分页和排序状态写入 URL，可通过刷新或分享链接恢复；
+- 政策详情以纯文本显示正文并保留换行，不解析或执行抓取内容中的 HTML。
+
+相关只读 API：
+
+- `GET /api/v1/policies/filters`：返回去重且稳定排序的 `publishers`、`categories`、`sources`；选项仅包含至少关联一条政策的数据；
+- `GET /api/v1/policies`：支持 `keyword`、`full_text`、`publisher`、`category_id`、`source_id`、发布时间/抓取时间范围、分页及排序参数；多个条件使用 AND 组合；
+- `GET /api/v1/policies/{policy_id}`：返回政策元数据和纯文本正文。
+
+接口均要求登录并具有政策数据库页面权限。页面显示时间统一转换为北京时间。需求行为与技术决策分别维护在 OpenSpec 变更的 `specs/policy-database-experience/spec.md` 和 `design.md` 中。
+
 ## 政策采集后端
 
 采集后端通过 WebFetch 服务获取 RSS、栏目页面和文章正文。运行前需要配置：

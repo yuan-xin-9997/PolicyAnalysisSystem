@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import column, func, or_, select, table, text
+from sqlalchemy import column, func, select, table, text
 from sqlalchemy.orm import Session
 
 from policy_analysis.policies.models import Policy, PolicyRevision
@@ -97,6 +97,28 @@ class PolicyRepository:
             total,
         )
 
+    def filter_options(self) -> tuple[list[str], list[PolicyCategory], list[Source]]:
+        publishers = list(
+            self._session.scalars(select(Policy.publisher).distinct().order_by(Policy.publisher))
+        )
+        categories = list(
+            self._session.scalars(
+                select(PolicyCategory)
+                .join(Policy, Policy.category_id == PolicyCategory.id)
+                .distinct()
+                .order_by(PolicyCategory.name, PolicyCategory.id)
+            )
+        )
+        sources = list(
+            self._session.scalars(
+                select(Source)
+                .join(Policy, Policy.source_id == Source.id)
+                .distinct()
+                .order_by(Source.name, Source.id)
+            )
+        )
+        return publishers, categories, sources
+
     def detail(self, policy_id: int) -> PolicyRecord | None:
         latest_task_id = (
             select(CrawlTaskItem.task_id)
@@ -121,7 +143,9 @@ class PolicyRepository:
 def _search_conditions(query: PolicyQuery) -> list[object]:
     conditions: list[object] = []
     if query.keyword is not None:
-        conditions.append(_keyword_condition(query.keyword))
+        conditions.append(Policy.title.like(_literal_like_pattern(query.keyword), escape="\\"))
+    if query.full_text is not None:
+        conditions.append(_full_text_condition(query.full_text))
     if query.published_from is not None:
         conditions.append(Policy.published_at >= query.published_from)
     if query.published_to is not None:
@@ -139,21 +163,21 @@ def _search_conditions(query: PolicyQuery) -> list[object]:
     return conditions
 
 
-def _keyword_condition(keyword: str) -> object:
+def _full_text_condition(full_text: str) -> object:
     # FTS5 trigram does not index one- or two-character terms. The escaped LIKE
     # fallback keeps those common Chinese searches literal and parameterized.
-    if len(keyword) < 3:
-        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
-        return or_(
-            Policy.title.like(pattern, escape="\\"),
-            Policy.content_text.like(pattern, escape="\\"),
-        )
+    if len(full_text) < 3:
+        return Policy.content_text.like(_literal_like_pattern(full_text), escape="\\")
 
     fts = table("policies_fts", column("rowid"))
-    literal_phrase = f'"{keyword.replace(chr(34), chr(34) * 2)}"'
+    literal_phrase = f'content_text : "{full_text.replace(chr(34), chr(34) * 2)}"'
     match = text("policies_fts MATCH :fts_query").bindparams(fts_query=literal_phrase)
     return Policy.id.in_(select(fts.c.rowid).where(match))
+
+
+def _literal_like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _sort_expressions(query: PolicyQuery) -> tuple[object, object]:

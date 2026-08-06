@@ -94,7 +94,17 @@ def policy_records(
         )
         meeting = PolicyCategory(code="meeting", name="重要会议", is_active=True)
         economy = PolicyCategory(code="economy", name="经济工作", is_active=True)
-        database.add_all([xinhua, government, meeting, economy])
+        unused_source = Source(
+            code="unused",
+            name="未使用来源",
+            organization="未使用机构",
+            base_url="https://unused.example.com/",
+            adapter_type="unused",
+            allowed_domains_json='["unused.example.com"]',
+            is_active=True,
+        )
+        unused_category = PolicyCategory(code="unused", name="未使用类别", is_active=True)
+        database.add_all([xinhua, government, unused_source, meeting, economy, unused_category])
         database.flush()
         rule = CollectionRule(
             source_id=xinhua.id,
@@ -131,6 +141,8 @@ def policy_records(
             "government": government.id,
             "meeting": meeting.id,
             "economy": economy.id,
+            "unused_source": unused_source.id,
+            "unused_category": unused_category.id,
             "task_id": task.id,
             "item_ids": [item.id for item in items],
         }
@@ -226,19 +238,23 @@ def test_policy_reads_require_session_and_policies_page_permission(
     policy_id = policy_records["policy_ids"][0]  # type: ignore[index]
     with client_context(app) as anonymous:
         assert anonymous.get("/api/v1/policies").status_code == 401
+        assert anonymous.get("/api/v1/policies/filters").status_code == 401
         assert anonymous.get(f"/api/v1/policies/{policy_id}").status_code == 401
     with client_context(app) as reader:
         _login(reader, "reader", "reader123")
         assert reader.get("/api/v1/policies").status_code == 403
+        assert reader.get("/api/v1/policies/filters").status_code == 403
         with sessions.begin() as database:
             user = database.scalar(select(User).where(User.username == "reader"))
             assert user is not None
             database.add(PagePermission(user_id=user.id, page_code="policies"))
         assert reader.get("/api/v1/policies").status_code == 200
+        assert reader.get("/api/v1/policies/filters").status_code == 200
         assert reader.get(f"/api/v1/policies/{policy_id}").status_code == 200
     with client_context(app) as admin:
         _login(admin, "admin", "admin123")
         assert admin.get("/api/v1/policies").status_code == 200
+        assert admin.get("/api/v1/policies/filters").status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -246,7 +262,7 @@ def test_policy_reads_require_session_and_policies_page_permission(
     [
         ("经济", ["中共中央政治局召开会议 研究经济工作", "国务院召开经济形势座谈会"]),
         ("经济工作", ["中共中央政治局召开会议 研究经济工作"]),
-        ("科技创新", ["中共中央政治局召开会议 审议重要文件"]),
+        ("科技创新", []),
     ],
 )
 def test_policy_keyword_search_supports_short_and_long_chinese_terms(
@@ -263,6 +279,53 @@ def test_policy_keyword_search_supports_short_and_long_chinese_terms(
     assert response.status_code == 200
     assert response.json()["total"] == len(expected_titles)
     assert [item["title"] for item in response.json()["items"]] == expected_titles
+
+
+@pytest.mark.parametrize(
+    ("full_text", "expected_titles"),
+    [
+        ("经济", ["中共中央政治局召开会议 研究经济工作"]),
+        ("科技创新", ["中共中央政治局召开会议 审议重要文件"]),
+        ("民生", ["国务院召开经济形势座谈会"]),
+    ],
+)
+def test_policy_full_text_search_only_matches_policy_content(
+    policy_api_runtime: tuple[FastAPI, sessionmaker[Session], Path, Engine],
+    policy_records: dict[str, object],
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+    full_text: str,
+    expected_titles: list[str],
+) -> None:
+    app, _sessions, _password_file, _engine = policy_api_runtime
+    with client_context(app) as admin:
+        _login(admin, "admin", "admin123")
+        response = admin.get("/api/v1/policies", params={"full_text": full_text})
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == expected_titles
+
+
+def test_policy_filter_options_are_distinct_sorted_and_only_reference_existing_policies(
+    policy_api_runtime: tuple[FastAPI, sessionmaker[Session], Path, Engine],
+    policy_records: dict[str, object],
+    client_context: Callable[..., AbstractContextManager[TestClient]],
+) -> None:
+    app, _sessions, _password_file, _engine = policy_api_runtime
+    with client_context(app) as admin:
+        _login(admin, "admin", "admin123")
+        response = admin.get("/api/v1/policies/filters")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "publishers": ["中国政府网", "新华社", "新华网"],
+        "categories": [
+            {"id": policy_records["economy"], "code": "economy", "name": "经济工作"},
+            {"id": policy_records["meeting"], "code": "meeting", "name": "重要会议"},
+        ],
+        "sources": [
+            {"id": policy_records["government"], "code": "government", "name": "政府网"},
+            {"id": policy_records["xinhua"], "code": "xinhua", "name": "新华网"},
+        ],
+    }
 
 
 @pytest.mark.parametrize(
@@ -310,6 +373,7 @@ def test_policy_list_combines_filters_and_keeps_count_pagination_consistent(
     app, _sessions, _password_file, _engine = policy_api_runtime
     params = {
         "keyword": "中共中央政治局",
+        "full_text": "当前经济形势",
         "publisher": "新华社",
         "category_id": policy_records["meeting"],
         "source_id": policy_records["xinhua"],
@@ -445,7 +509,7 @@ def test_policy_api_never_exposes_fts_syntax_errors(
     app, _sessions, _password_file, _engine = policy_api_runtime
     with client_context(app, raise_server_exceptions=False) as admin:
         _login(admin, "admin", "admin123")
-        response = admin.get("/api/v1/policies", params={"keyword": keyword})
+        response = admin.get("/api/v1/policies", params={"full_text": keyword})
     assert response.status_code == 200
     assert response.json()["total"] == 0
 
@@ -460,6 +524,7 @@ def test_policy_api_never_exposes_fts_syntax_errors(
         "sort_by=content_hash",
         "sort_order=random",
         "keyword=%20%20%20",
+        "full_text=%20%20%20",
         "publisher=%20新华社",
         "published_from=2026-07-30T12:00:00",
         "published_from=2026-08-01T00:00:00%2B08:00&published_to=2026-07-01T00:00:00%2B08:00",
@@ -490,4 +555,5 @@ def test_read_only_policy_routes_do_not_require_csrf(
     with client_context(app) as admin:
         _login(admin, "admin", "admin123")
         assert admin.get("/api/v1/policies", headers={"X-CSRF-Token": "wrong"}).status_code == 200
+        assert admin.get("/api/v1/policies/filters").status_code == 200
         assert admin.get(f"/api/v1/policies/{policy_id}").status_code == 200

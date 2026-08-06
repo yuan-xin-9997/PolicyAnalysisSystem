@@ -24,6 +24,7 @@ export async function installMockApi(page: Page): Promise<void> {
       return route.fulfill({ status: 204 })
     }
     if (path === '/api/v1/system/info') return fulfillJson(route, { version: 'v0.e2e', commit_sha: 'e2etest' })
+    if (path === '/api/v1/policies/filters') return fulfillJson(route, policyFilterOptions())
     if (path === '/api/v1/policies') return fulfillJson(route, policyPage())
     if (path === '/api/v1/policies/7') return fulfillJson(route, policyDetail())
     if (path === '/api/v1/tasks' && method === 'GET') return fulfillJson(route, taskPage())
@@ -109,6 +110,16 @@ function policyPage(): object {
     total: 1,
     page: 1,
     page_size: 20,
+    sort_by: 'published_at',
+    sort_order: 'desc',
+  }
+}
+
+function policyFilterOptions(): object {
+  return {
+    publishers: ['新华社'],
+    categories: [{ id: 1, code: 'politics', name: '政治' }],
+    sources: [{ id: 1, code: 'xinhua', name: '新华网' }],
   }
 }
 

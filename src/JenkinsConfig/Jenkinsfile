@@ -27,6 +27,30 @@ pipeline {
             }
         }
 
+        stage('Verify') {
+            options {
+                timeout(time: 20, unit: 'MINUTES')
+            }
+            steps {
+                sh '''
+                    set -eu
+                    if [ ! -d .venv ]; then
+                        "${PYTHON_BIN}" -m venv .venv
+                    fi
+                    .venv/bin/pip install --timeout 30 --retries 5 -e '.[dev]'
+                    npm --prefix src/app/frontend ci
+
+                    .venv/bin/pytest -q
+                    .venv/bin/ruff check src/app/backend src/tests/backend
+                    .venv/bin/ruff format --check src/app/backend src/tests/backend
+                    npm --prefix src/app/frontend run type-check
+                    npm --prefix src/app/frontend run lint
+                    npm --prefix src/app/frontend run test -- --run
+                    npm --prefix src/app/frontend run build
+                '''
+            }
+        }
+
         stage('Stop current service') {
             steps {
                 sh '''

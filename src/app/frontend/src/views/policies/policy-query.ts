@@ -2,6 +2,7 @@ import type { LocationQuery } from 'vue-router'
 
 export interface PolicyQueryForm {
   keyword: string
+  fullText: string
   publisher: string
   categoryId: string
   sourceId: string
@@ -16,6 +17,7 @@ export interface PolicyQueryForm {
 export function defaultPolicyQuery(): PolicyQueryForm {
   return {
     keyword: '',
+    fullText: '',
     publisher: '',
     categoryId: '',
     sourceId: '',
@@ -36,6 +38,7 @@ export function toPolicyApiQuery(form: PolicyQueryForm): Record<string, string |
     sort_order: form.sortOrder,
   }
   if (form.keyword.trim()) query.keyword = form.keyword.trim()
+  if (form.fullText.trim()) query.full_text = form.fullText.trim()
   if (form.publisher.trim()) query.publisher = form.publisher.trim()
   if (form.categoryId) query.category_id = form.categoryId
   if (form.sourceId) query.source_id = form.sourceId
@@ -47,6 +50,7 @@ export function toPolicyApiQuery(form: PolicyQueryForm): Record<string, string |
 export function fromRouteQuery(query: LocationQuery): PolicyQueryForm {
   const form = defaultPolicyQuery()
   form.keyword = first(query.keyword)
+  form.fullText = first(query.full_text)
   form.publisher = first(query.publisher)
   form.categoryId = first(query.category_id)
   form.sourceId = first(query.source_id)
