@@ -224,6 +224,8 @@ __marimo__/
 .venv/
 node_modules/
 src/app/frontend/dist/
+src/app/frontend/test-results/
+src/app/frontend/playwright-report/
 htmlcov/
 .coverage
 coverage.xml

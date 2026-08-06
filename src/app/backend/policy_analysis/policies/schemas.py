@@ -118,6 +118,7 @@ class PolicyQuery(StrictModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     keyword: Annotated[str, StringConstraints(min_length=1, max_length=512)] | None = None
+    full_text: Annotated[str, StringConstraints(min_length=1, max_length=512)] | None = None
     published_from: datetime | None = None
     published_to: datetime | None = None
     crawled_from: datetime | None = None
@@ -130,7 +131,7 @@ class PolicyQuery(StrictModel):
     sort_by: Literal["published_at", "last_crawled_at"] = "published_at"
     sort_order: Literal["asc", "desc"] = "desc"
 
-    @field_validator("keyword", "publisher")
+    @field_validator("keyword", "full_text", "publisher")
     @classmethod
     def reject_untrimmed_query_text(cls, value: str | None) -> str | None:
         if value is not None and (
@@ -163,6 +164,14 @@ class PolicyReferenceRead(StrictModel):
     id: int
     code: str
     name: str
+
+
+class PolicyFilterOptions(StrictModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    publishers: list[str]
+    categories: list[PolicyReferenceRead]
+    sources: list[PolicyReferenceRead]
 
 
 class PolicyListItem(StrictModel):

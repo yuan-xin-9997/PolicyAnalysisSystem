@@ -32,8 +32,15 @@ async function loadPolicy(): Promise<void> {
     <p v-if="loading" role="status" class="state-card">正在加载政策详情</p>
     <p v-else-if="errorMessage" role="alert" class="state-card error-state">{{ errorMessage }}</p>
     <article v-else-if="policy" class="policy-detail">
-      <span class="eyebrow">{{ policy.source.name }} · {{ policy.category.name }}</span>
-      <h1 id="policy-detail-title">{{ policy.title }}</h1>
+      <header class="policy-detail-header">
+        <div>
+          <span class="eyebrow">{{ policy.source.name }} · {{ policy.category.name }}</span>
+          <h1 id="policy-detail-title">{{ policy.title }}</h1>
+        </div>
+        <div class="policy-actions">
+          <a :href="policy.canonical_url" target="_blank" rel="noopener noreferrer">打开原文</a>
+        </div>
+      </header>
       <dl class="metadata-grid">
         <div>
           <dt>发布部门</dt>
@@ -47,14 +54,11 @@ async function loadPolicy(): Promise<void> {
           <dt>最近抓取时间</dt>
           <dd>{{ formatBeijingTime(policy.last_crawled_at) }}</dd>
         </div>
-        <div>
-          <dt>原文链接</dt>
-          <dd>
-            <a :href="policy.canonical_url" target="_blank" rel="noopener noreferrer">打开原文</a>
-          </dd>
-        </div>
       </dl>
-      <pre class="policy-content">{{ policy.content_text }}</pre>
+      <section class="policy-body" aria-labelledby="policy-content-title">
+        <h2 id="policy-content-title">政策正文</h2>
+        <div class="policy-content">{{ policy.content_text }}</div>
+      </section>
     </article>
   </section>
 </template>

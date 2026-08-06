@@ -270,7 +270,7 @@ def test_policy_query_bounds_page_before_building_sqlite_offset() -> None:
         PolicyQuery(page=1, page_size=10**100)
 
 
-@pytest.mark.parametrize("field", ["keyword", "publisher"])
+@pytest.mark.parametrize("field", ["keyword", "full_text", "publisher"])
 @pytest.mark.parametrize("unsafe_character", ["\u0085", "\u202e", "\u2066", "\u2069", "\u200b"])
 def test_policy_query_text_rejects_all_control_and_format_characters(
     field: str,
@@ -533,7 +533,7 @@ def test_database_failure_after_revision_insert_rolls_back_every_change(
         assert database.scalar(select(func.count()).select_from(PolicyRevision)) == 0
 
 
-def test_fts_search_matches_long_chinese_title_and_body_and_short_term_fallback(
+def test_title_and_full_text_search_have_distinct_scopes_and_short_term_fallback(
     policy_catalog: tuple[sessionmaker[Session], int, int, int, tuple[int, ...]],
 ) -> None:
     sessions, source_id, category_id, _economy_id, item_ids = policy_catalog
@@ -552,8 +552,13 @@ def test_fts_search_matches_long_chinese_title_and_body_and_short_term_fallback(
     )
 
     assert [item.id for item in service.search(PolicyQuery(keyword="经济工作")).items] == [first.policy_id]
-    assert [item.id for item in service.search(PolicyQuery(keyword="科技创新")).items] == [second.policy_id]
+    assert service.search(PolicyQuery(keyword="科技创新")).items == []
+    assert [item.id for item in service.search(PolicyQuery(full_text="科技创新")).items] == [second.policy_id]
+    assert service.search(PolicyQuery(full_text="审议重要文件")).items == []
     assert [item.id for item in service.search(PolicyQuery(keyword="经济")).items] == [first.policy_id]
+    assert [item.id for item in service.search(PolicyQuery(full_text="经济")).items] == [first.policy_id]
+    combined = service.search(PolicyQuery(keyword="重要文件", full_text="科技创新"))
+    assert [item.id for item in combined.items] == [second.policy_id]
 
 
 @pytest.mark.parametrize("keyword", ['"', "OR", "NEAR(", "*", "%", "_", "\\"])
@@ -565,7 +570,7 @@ def test_fts_search_treats_syntax_and_like_metacharacters_as_literal_text(
     service = PolicyService(sessions)
     service.upsert(article_record(source_id, category_id), task_item_id=item_ids[0])
 
-    result = service.search(PolicyQuery(keyword=keyword))
+    result = service.search(PolicyQuery(full_text=keyword))
 
     assert result.total == 0
     assert result.items == []
@@ -584,7 +589,7 @@ def test_fts_triggers_follow_policy_updates_and_deletes(
         policy.title = "中共中央政治局召开会议 推进区域协调发展"
         policy.content_text = "修订后的正文聚焦区域协调发展。"
 
-    assert service.search(PolicyQuery(keyword="区域协调")).total == 1
+    assert service.search(PolicyQuery(full_text="区域协调")).total == 1
     assert service.search(PolicyQuery(keyword="经济工作")).total == 0
 
     with sessions.begin() as database:
@@ -592,7 +597,7 @@ def test_fts_triggers_follow_policy_updates_and_deletes(
         assert policy is not None
         database.delete(policy)
 
-    assert service.search(PolicyQuery(keyword="区域协调")).total == 0
+    assert service.search(PolicyQuery(full_text="区域协调")).total == 0
 
 
 def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(

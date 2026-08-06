@@ -15,6 +15,7 @@ from policy_analysis.policies.models import Policy, PolicyRevision
 from policy_analysis.policies.repository import PolicyRecord, PolicyRepository
 from policy_analysis.policies.schemas import (
     PolicyDetail,
+    PolicyFilterOptions,
     PolicyListItem,
     PolicyPage,
     PolicyQuery,
@@ -22,6 +23,7 @@ from policy_analysis.policies.schemas import (
     PolicyUpsertResult,
     PolicyWrite,
 )
+from policy_analysis.sources.models import PolicyCategory, Source
 
 # The supported deployment is one FastAPI process. This lock makes the
 # select-then-insert content deduplication safe across its worker threads.
@@ -163,6 +165,15 @@ class PolicyService:
             item = _record_to_list_item(record)
             return PolicyDetail(**item.model_dump(), content_text=record.policy.content_text)
 
+    def filter_options(self) -> PolicyFilterOptions:
+        with self._sessions() as session:
+            publishers, categories, sources = PolicyRepository(session).filter_options()
+            return PolicyFilterOptions(
+                publishers=publishers,
+                categories=[_reference_to_read(category) for category in categories],
+                sources=[_reference_to_read(source) for source in sources],
+            )
+
     def revision_count(self, policy_id: int) -> int:
         with self._sessions() as session:
             return PolicyRepository(session).revision_count(policy_id)
@@ -180,21 +191,21 @@ def _record_to_list_item(record: PolicyRecord) -> PolicyListItem:
         title=record.policy.title,
         canonical_url=record.policy.canonical_url,
         publisher=record.policy.publisher,
-        category=PolicyReferenceRead(
-            id=record.category.id,
-            code=record.category.code,
-            name=record.category.name,
-        ),
-        source=PolicyReferenceRead(
-            id=record.source.id,
-            code=record.source.code,
-            name=record.source.name,
-        ),
+        category=_reference_to_read(record.category),
+        source=_reference_to_read(record.source),
         published_at=record.policy.published_at,
         first_crawled_at=record.policy.first_crawled_at,
         last_crawled_at=record.policy.last_crawled_at,
         content_hash=record.policy.content_hash,
         latest_task_id=record.latest_task_id,
+    )
+
+
+def _reference_to_read(reference: PolicyCategory | Source) -> PolicyReferenceRead:
+    return PolicyReferenceRead(
+        id=reference.id,
+        code=reference.code,
+        name=reference.name,
     )
 
 

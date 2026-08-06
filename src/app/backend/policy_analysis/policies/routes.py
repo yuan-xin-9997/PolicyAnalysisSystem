@@ -15,6 +15,7 @@ from policy_analysis.policies.schemas import (
     MAX_POLICY_PAGE,
     MAX_POLICY_PAGE_SIZE,
     PolicyDetail,
+    PolicyFilterOptions,
     PolicyPage,
     PolicyQuery,
 )
@@ -25,6 +26,7 @@ PositiveIdPath = Annotated[int, Path(ge=1)]
 require_policies_page = require_page(PageCode.POLICIES)
 _LIST_QUERY_PARAMETERS = {
     "keyword",
+    "full_text",
     "published_from",
     "published_to",
     "crawled_from",
@@ -50,6 +52,7 @@ def get_policy_service(request: Request) -> PolicyService:
 def list_policies(
     request: Request,
     keyword: Annotated[str | None, Query(max_length=512)] = None,
+    full_text: Annotated[str | None, Query(max_length=512)] = None,
     published_from: datetime | None = None,
     published_to: datetime | None = None,
     crawled_from: datetime | None = None,
@@ -72,6 +75,7 @@ def list_policies(
     try:
         query = PolicyQuery(
             keyword=keyword,
+            full_text=full_text,
             published_from=published_from,
             published_to=published_to,
             crawled_from=crawled_from,
@@ -87,6 +91,16 @@ def list_policies(
     except ValidationError:
         raise _validation_error() from None
     return service.search(query)
+
+
+@router.get("/filters", response_model=PolicyFilterOptions)
+def get_policy_filter_options(
+    request: Request,
+    _user: PublicUser = Depends(require_policies_page),
+    service: PolicyService = Depends(get_policy_service),
+) -> PolicyFilterOptions:
+    _validate_query_keys(request, set())
+    return service.filter_options()
 
 
 @router.get("/{policy_id}", response_model=PolicyDetail)
