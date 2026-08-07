@@ -35,6 +35,21 @@ _CHINESE_DATE = re.compile(
 _OLD_URL_DATE = re.compile(r"/(20\d{2})-(\d{2})/(\d{2})(?:/|$)")
 _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
 
+# Patterns for stripping webpage page-chrome from extracted article bodies.
+# A decorative header segment is one of: a ">"-separated breadcrumb, a leading
+# timestamp, or a "来源：xxx" source marker -- the page header Xinhua prepends
+# (e.g. "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网").
+_BREADCRUMB_SEGMENT = r"(?:[^\s>]+\s*>\s*)+[^\s>]+"
+_TIMESTAMP_SEGMENT = (
+    r"\d{4}(?:[-/年.]\d{1,2}[-/月.]\d{1,2}日?|\s\d{1,2}/\d{1,2})"
+    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"
+)
+_SOURCE_SEGMENT = r"来源：[^\s]+"
+_DECORATIVE_SEGMENT = rf"(?:{_BREADCRUMB_SEGMENT}|{_TIMESTAMP_SEGMENT}|{_SOURCE_SEGMENT})"
+_DECORATIVE_LINE = re.compile(rf"^(?:{_DECORATIVE_SEGMENT}\s*)+$")
+_DECORATIVE_PREFIX = re.compile(rf"^\s*(?:{_DECORATIVE_SEGMENT}\s*)+")
+_READ_NEXT_MARKER = "阅读下一篇"
+
 
 @dataclass(frozen=True, slots=True)
 class Classification:
@@ -186,7 +201,7 @@ class XinhuaCollector:
             reason_code=reason,
             canonical_url=canonical,
             title=article.title,
-            content=article.content,
+            content=_clean_content(article.content),
             publisher=publisher,
             published_at=published_at,
             artifact_id=article.artifact_id,
@@ -283,6 +298,55 @@ def _normalized_keywords(values: Any, *, require_nonempty: bool) -> tuple[str, .
 
 def _collapsed(value: str) -> str:
     return " ".join(value.split())
+
+
+def _clean_content(content: str) -> str:
+    """Strip webpage page-chrome from an extracted article body.
+
+    Removes the leading breadcrumb/timestamp/source header, the trailing
+    "阅读下一篇" recommendation block, and normalizes paragraph whitespace so
+    the stored body is pure policy text. Body-leading dates without a breadcrumb
+    or "来源：" marker are preserved (not mistaken for chrome).
+    """
+    if not isinstance(content, str) or not content:
+        return content
+
+    text = content
+    marker = text.find(_READ_NEXT_MARKER)
+    if marker != -1:
+        text = text[:marker]
+
+    lines = text.splitlines()
+
+    # Drop leading lines that are purely decorative (breadcrumb/timestamp/source).
+    start = 0
+    while start < len(lines) and _DECORATIVE_LINE.match(lines[start].strip()):
+        start += 1
+    lines = lines[start:]
+
+    # Strip an inline decorative prefix from the first remaining line, but only
+    # when it carries an unambiguous page-chrome signal (breadcrumb ">" or a
+    # "来源：" source marker) so a body-leading date is never removed.
+    if lines:
+        match = _DECORATIVE_PREFIX.match(lines[0])
+        if match and (">" in match.group() or "来源：" in match.group()):
+            lines[0] = lines[0][match.end():]
+
+    # Normalize: strip each line, drop leading/trailing blank lines, collapse
+    # runs of blank lines into a single blank line to preserve paragraph breaks.
+    normalized: list[str] = []
+    prev_blank = True
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            normalized.append(stripped)
+            prev_blank = False
+        elif not prev_blank:
+            normalized.append("")
+            prev_blank = True
+    while normalized and not normalized[-1]:
+        normalized.pop()
+    return "\n".join(normalized)
 
 
 def _is_official_source(author: str, content: str) -> bool:

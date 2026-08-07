@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from concurrent.futures import ThreadPoolExecutor
@@ -182,6 +183,32 @@ def test_runner_stores_verified_seed_with_real_item_and_short_transactions(task_
         assert (task.discovered_count, task.success_count, task.failed_count) == (1, 1, 0)
         assert (item.status, item.attempt_count, item.policy_id) == ("stored", 1, 1)
         assert db.scalar(select(func.count()).select_from(Policy)) == 1
+
+
+def test_runner_persists_cleaned_content_and_hash_from_noisy_article(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    task_id, _ = catalog(
+        task_db, seed_urls=[(url, True, "中共中央政治局召开会议", date(2026, 8, 1))]
+    )
+    noisy_body = (
+        "2026年8月1日 10:00:00 来源：新华社 "
+        "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30
+        + "\n阅读下一篇： 37 其他推荐标题"
+    )
+    client = FakeWebFetch(task_db, {url: article("2026-08-01", content=noisy_body)})
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    expected_clean = "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30
+    expected_hash = hashlib.sha256(expected_clean.encode("utf-8")).hexdigest()
+    with task_db() as db:
+        policy = db.scalar(select(Policy))
+        assert policy is not None
+        assert policy.content_text == expected_clean
+        assert policy.content_hash == expected_hash
+        assert "来源：新华社" not in policy.content_text
+        assert "阅读下一篇" not in policy.content_text
 
 
 def test_runner_verified_seed_failure_overrides_partial_success_and_preserves_seed_identity(task_db) -> None:

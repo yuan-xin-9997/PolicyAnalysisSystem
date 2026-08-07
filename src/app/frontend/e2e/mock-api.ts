@@ -126,7 +126,8 @@ function policyFilterOptions(): object {
 function policyDetail(): object {
   return {
     ...(policyPage() as { items: object[] }).items[0],
-    content_text: '第一段政策正文。\n<script>window.e2eLeak=true</script>',
+    content_text:
+      '第一段政策正文。\n\n第二段政策正文，用于验证分段与首行缩进。\n<script>window.e2eLeak=true</script>',
   }
 }
 

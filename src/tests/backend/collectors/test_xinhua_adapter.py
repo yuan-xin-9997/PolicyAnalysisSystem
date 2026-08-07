@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from policy_analysis.collectors.base import DiscoveredLink, ExtractedArticle
-from policy_analysis.collectors.xinhua import XinhuaCollector
+from policy_analysis.collectors.xinhua import XinhuaCollector, _clean_content
 
 FIXTURES = Path(__file__).with_name("fixtures")
 INCLUDE = ("中共中央政治局召开会议",)
@@ -575,3 +575,81 @@ def test_constructor_copies_and_normalizes_mutable_configuration() -> None:
         ).accepted
         is True
     )
+
+
+def test_clean_strips_inline_breadcrumb_timestamp_and_source_header() -> None:
+    content = (
+        "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网 "
+        "新华社北京7月30日电 中共中央政治局召开会议。会议分析研究当前经济形势。"
+    )
+
+    assert _clean_content(content) == (
+        "新华社北京7月30日电 中共中央政治局召开会议。会议分析研究当前经济形势。"
+    )
+
+
+def test_clean_strips_header_on_its_own_line() -> None:
+    content = (
+        "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网\n"
+        "新华社北京7月30日电 中共中央政治局召开会议。"
+    )
+
+    assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
+
+
+def test_clean_strips_read_next_footer_block() -> None:
+    content = (
+        "新华社北京7月30日电 中共中央政治局召开会议。\n"
+        "阅读下一篇： 37 中共中央政治局召开会议 决定召开二十届五中全会 "
+        "分析研究当前经济形势和经济工作"
+    )
+
+    assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
+
+
+def test_clean_preserves_body_paragraph_separation() -> None:
+    content = (
+        "新华社北京7月30日电 中共中央政治局召开会议。\n\n"
+        "会议分析研究当前经济形势。\n\n\n"
+        "会议还研究了其他事项。"
+    )
+
+    assert _clean_content(content) == (
+        "新华社北京7月30日电 中共中央政治局召开会议。\n\n"
+        "会议分析研究当前经济形势。\n\n"
+        "会议还研究了其他事项。"
+    )
+
+
+def test_clean_leaves_undecorated_body_unchanged() -> None:
+    content = "新华社北京7月30日电 中共中央政治局召开会议。会议分析研究当前形势。"
+
+    assert _clean_content(content) == content
+
+
+def test_clean_preserves_body_leading_date_without_source_marker() -> None:
+    content = "2025年1月2日 新华社北京电 中共中央政治局召开会议。" + "内容。" * 5
+
+    assert _clean_content(content) == content
+
+
+def test_classify_returns_cleaned_content_for_accepted_article() -> None:
+    collector = _collector()
+    article = _article(
+        content=(
+            "2026年7月30日 14:36:12 来源：新华网 "
+            "新华社北京7月30日电 中共中央政治局召开会议。" + "会议部署。" * 30
+            + "\n阅读下一篇： 37 其他推荐标题"
+        )
+    )
+
+    result = collector.classify(
+        "https://www.news.cn/20260730/a.html",
+        article,
+        datetime(2020, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.accepted is True
+    assert result.content.startswith("新华社北京7月30日电 中共中央政治局召开会议。")
+    assert "来源：新华网" not in result.content
+    assert "阅读下一篇" not in result.content

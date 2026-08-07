@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { ApiError, apiRequest } from '../../api/client'
 import type { PolicyDetail } from '../../api/types'
@@ -9,6 +9,13 @@ const props = defineProps<{ policyId: number | string }>()
 const loading = ref(true)
 const errorMessage = ref('')
 const policy = ref<PolicyDetail | null>(null)
+
+const paragraphs = computed(() =>
+  (policy.value?.content_text ?? '')
+    .split(/\r?\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean),
+)
 
 onMounted(() => {
   void loadPolicy()
@@ -57,7 +64,9 @@ async function loadPolicy(): Promise<void> {
       </dl>
       <section class="policy-body" aria-labelledby="policy-content-title">
         <h2 id="policy-content-title">政策正文</h2>
-        <div class="policy-content">{{ policy.content_text }}</div>
+        <div class="policy-content">
+          <p v-for="(paragraph, index) in paragraphs" :key="index">{{ paragraph }}</p>
+        </div>
       </section>
     </article>
   </section>
