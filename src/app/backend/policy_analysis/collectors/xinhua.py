@@ -330,7 +330,7 @@ def _clean_content(content: str) -> str:
     if lines:
         match = _DECORATIVE_PREFIX.match(lines[0])
         if match and (">" in match.group() or "来源：" in match.group()):
-            lines[0] = lines[0][match.end():]
+            lines[0] = lines[0][match.end() :]
 
     # Normalize: strip each line, drop leading/trailing blank lines, collapse
     # runs of blank lines into a single blank line to preserve paragraph breaks.

@@ -590,8 +590,7 @@ def test_clean_strips_inline_breadcrumb_timestamp_and_source_header() -> None:
 
 def test_clean_strips_header_on_its_own_line() -> None:
     content = (
-        "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网\n"
-        "新华社北京7月30日电 中共中央政治局召开会议。"
+        "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网\n新华社北京7月30日电 中共中央政治局召开会议。"
     )
 
     assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
@@ -615,9 +614,7 @@ def test_clean_preserves_body_paragraph_separation() -> None:
     )
 
     assert _clean_content(content) == (
-        "新华社北京7月30日电 中共中央政治局召开会议。\n\n"
-        "会议分析研究当前经济形势。\n\n"
-        "会议还研究了其他事项。"
+        "新华社北京7月30日电 中共中央政治局召开会议。\n\n会议分析研究当前经济形势。\n\n会议还研究了其他事项。"
     )
 
 
@@ -638,7 +635,8 @@ def test_classify_returns_cleaned_content_for_accepted_article() -> None:
     article = _article(
         content=(
             "2026年7月30日 14:36:12 来源：新华网 "
-            "新华社北京7月30日电 中共中央政治局召开会议。" + "会议部署。" * 30
+            "新华社北京7月30日电 中共中央政治局召开会议。"
+            + "会议部署。" * 30
             + "\n阅读下一篇： 37 其他推荐标题"
         )
     )

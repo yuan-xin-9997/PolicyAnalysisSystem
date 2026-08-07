@@ -187,13 +187,10 @@ def test_runner_stores_verified_seed_with_real_item_and_short_transactions(task_
 
 def test_runner_persists_cleaned_content_and_hash_from_noisy_article(task_db) -> None:
     url = "https://www.news.cn/20260801/seed.html"
-    task_id, _ = catalog(
-        task_db, seed_urls=[(url, True, "中共中央政治局召开会议", date(2026, 8, 1))]
-    )
+    task_id, _ = catalog(task_db, seed_urls=[(url, True, "中共中央政治局召开会议", date(2026, 8, 1))])
     noisy_body = (
         "2026年8月1日 10:00:00 来源：新华社 "
-        "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30
-        + "\n阅读下一篇： 37 其他推荐标题"
+        "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30 + "\n阅读下一篇： 37 其他推荐标题"
     )
     client = FakeWebFetch(task_db, {url: article("2026-08-01", content=noisy_body)})
 
