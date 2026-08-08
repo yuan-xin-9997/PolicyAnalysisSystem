@@ -147,4 +147,16 @@ export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
 
 采集器在入库前会对正文进行清洗并恢复段落结构：由于 WebFetch 的 `generic.article` 适配器会把正文压成单行空格拼接、丢失 `<p>` 段落，采集判定通过后额外调用 `fetch_text` 取回原始 HTML，优先解析 `<div id="detail">` 内的 `<p>` 块还原段落（`<p>` 缺失时回退到扁平正文），再剥离网页页面装饰信息——包括开头的面包屑（含「新华网 > > 正文」双 `>` 变体）、栏目、带空格时间戳（如「2022 12/ 14」）与「来源：」页眉行，以及结尾的编辑署名（「策划：」「监制：」「新华社音视频部制作」「新华通讯社出品」等）、「【纠错】」「【责任编辑:xxx】」标记、「阅读下一篇：N …」推荐区块和尾部纯数字跟踪 ID，并归一化段落空白；清洗在计算内容哈希与写入正文前完成，使去重与存储均基于段落化纯政策正文，且不改变采集判定阈值。段落抓取失败或解析为空时自动回退扁平正文并记录告警日志，绝不阻断采集。
 
-已入库政策的历史正文可使用 `scripts/reclean_policy_content.py` 重洗：脚本对每条 `content_text` 应用新版清洗规则、重算 `content_hash`，仅更新确有变化的行（幂等，可重复执行），`policies_fts_au` 触发器会同步全文索引；先用 `--dry-run` 预览将变更的行，再正式执行。
+已入库政策的历史正文可使用 `scripts/reclean_policy_content.py` 重洗，脚本对每条 `content_text` 重算 `content_hash`，仅更新确有变化的行（幂等，可重复执行），`policies_fts_au` 触发器会同步全文索引。两种模式：
+
+- **扁平清洗（默认）**：对存量 `content_text` 应用新版清洗规则，剥离页脚/工具栏/编辑署名等装饰。但 WebFetch 适配器会把标题预置在正文最前，使页眉（`新华网 > 时政 > 正文 … 来源：新华网`）不在行首，行首锚定的清洗正则无法剥离它，且扁平正文无法分段。
+- **重抓分段（`--refetch`）**：按每条政策的 `canonical_url` 重新抓取原始 HTML，从 `<p>` 元素还原段落结构（天然排除位于 `<p>` 之外的标题与页眉），彻底去页眉并恢复多段正文。抓取失败或解析为空时安全回退到扁平清洗，绝不因重抓失败阻塞清洗。需配置 WebFetch（`base_url`/`api_key`）。
+
+用法（App 运行环境，venv 已激活，`service.env` 已注入 WebFetch 配置）：
+
+```bash
+python scripts/reclean_policy_content.py --dry-run              # 预览扁平清洗将变更的行
+python scripts/reclean_policy_content.py                         # 扁平清洗写库
+python scripts/reclean_policy_content.py --refetch --dry-run     # 预览重抓分段将变更的行
+python scripts/reclean_policy_content.py --refetch               # 重抓 HTML 还原段落并写库
+```
