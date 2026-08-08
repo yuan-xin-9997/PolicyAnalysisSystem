@@ -596,6 +596,23 @@ def test_clean_strips_header_on_its_own_line() -> None:
     assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
 
 
+def test_clean_strips_header_after_leading_blank_line() -> None:
+    content = (
+        "\n新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网\n"
+        "新华社北京7月30日电 中共中央政治局召开会议。"
+    )
+
+    assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
+
+
+def test_clean_strips_inline_header_after_leading_blank_line() -> None:
+    content = (
+        "\n新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网 新华社北京7月30日电 中共中央政治局召开会议。"
+    )
+
+    assert _clean_content(content) == "新华社北京7月30日电 中共中央政治局召开会议。"
+
+
 def test_clean_strips_read_next_footer_block() -> None:
     content = (
         "新华社北京7月30日电 中共中央政治局召开会议。\n"

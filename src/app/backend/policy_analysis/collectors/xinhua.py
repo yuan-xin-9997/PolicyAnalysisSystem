@@ -318,9 +318,15 @@ def _clean_content(content: str) -> str:
 
     lines = text.splitlines()
 
-    # Drop leading lines that are purely decorative (breadcrumb/timestamp/source).
+    # Drop leading blank lines and lines that are purely decorative
+    # (breadcrumb/timestamp/source). Skipping blanks first ensures a page
+    # header that follows a blank line is still detected and stripped, instead
+    # of stopping the scan at the blank and leaving the header in the body.
     start = 0
-    while start < len(lines) and _DECORATIVE_LINE.match(lines[start].strip()):
+    while start < len(lines):
+        stripped = lines[start].strip()
+        if stripped and not _DECORATIVE_LINE.match(stripped):
+            break
         start += 1
     lines = lines[start:]
 

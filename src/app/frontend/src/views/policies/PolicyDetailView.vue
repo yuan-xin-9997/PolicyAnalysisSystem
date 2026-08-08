@@ -12,7 +12,7 @@ const policy = ref<PolicyDetail | null>(null)
 
 const paragraphs = computed(() =>
   (policy.value?.content_text ?? '')
-    .split(/\r?\n/)
+    .split(/[\r\n\u2028\u2029]+/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean),
 )
