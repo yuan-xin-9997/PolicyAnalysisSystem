@@ -1,22 +1,9 @@
-# policy-content-cleaning Specification
+## RENAMED Requirements
 
-## Purpose
-TBD - created by archiving change clean-policy-content-and-display. Update Purpose after archive.
-## Requirements
-### Requirement: 正文清洗在去重与持久化前完成
-采集器 SHALL 在计算 `content_hash` 与持久化 `content_text` 之前完成段落化提取与正文清洗，使去重哈希与存储内容均反映段落化的纯政策正文，且清洗 SHALL 不改变采集判定阈值与既有分类规则的结果语义。
+- FROM: ### Requirement: 政策正文剥离网页页面装饰信息
+- TO: ### Requirement: 政策正文按 HTML 段落结构提取并剥离网页装饰
 
-#### Scenario: 去重哈希基于清洗后正文
-- **WHEN** 采集器对一篇含页面装饰的文章计算 `content_hash`
-- **THEN** 哈希基于剥离装饰后的段落化正文计算，同一正文在不同页面装饰下产生相同哈希
-
-#### Scenario: 持久化正文为清洗后内容
-- **WHEN** 一篇通过采集判定的文章被写入政策数据库
-- **THEN** 存入 `content_text` 的是按 `<p>` 段落结构提取、剥离装饰后的正文，段落以换行分隔，不包含面包屑、来源页眉、编辑署名、推荐区块或跟踪 ID
-
-#### Scenario: 清洗不改变采集判定
-- **WHEN** 采集器对文章执行段落化提取与清洗
-- **THEN** 最小正文长度、关键词匹配等采集判定阈值与分类规则仍基于正文语义判定，清洗不导致原本接受的正文被拒绝或原本拒绝的正文被接受
+## MODIFIED Requirements
 
 ### Requirement: 政策正文按 HTML 段落结构提取并剥离网页装饰
 采集器 SHALL 在文章正文入库前，从 WebFetch 取回的原始 HTML 正文区域（如 `<div id="detail">`）按块级段落元素（`<p>`）提取正文，将每个 `<p>` 作为独立段落以换行拼接，并 SHALL 剥离残留进段落的网页页面装饰信息——包括开头的面包屑/栏目/时间/来源页眉行（如「新华网 > > 正文 2022 12/ 14 11:37:37 来源：新华社」，含双 `>` 与带空格时间戳等变体）、结尾的编辑署名块（「策划：…」「监制：…」「统筹：…」「编导：…」「记者：…」「配音：…」「新华社音视频部制作」「新华通讯社出品」）、「【纠错】」「【责任编辑:xxx】」标记、「阅读下一篇：N …」推荐区块以及尾部纯数字跟踪 ID；正文主体段落及其换行分隔 SHALL 予以保留。该提取 SHALL 不依赖 WebFetch `generic.article` 适配器返回的扁平化单行文本中的换行。
@@ -49,3 +36,17 @@ TBD - created by archiving change clean-policy-content-and-display. Update Purpo
 - **WHEN** 文章 HTML 缺少可解析的 `<p>` 正文区域
 - **THEN** 采集器回退到对扁平化正文做内联装饰剥离，且绝不产出空正文
 
+### Requirement: 正文清洗在去重与持久化前完成
+采集器 SHALL 在计算 `content_hash` 与持久化 `content_text` 之前完成段落化提取与正文清洗，使去重哈希与存储内容均反映段落化的纯政策正文，且清洗 SHALL 不改变采集判定阈值与既有分类规则的结果语义。
+
+#### Scenario: 去重哈希基于清洗后正文
+- **WHEN** 采集器对一篇含页面装饰的文章计算 `content_hash`
+- **THEN** 哈希基于剥离装饰后的段落化正文计算，同一正文在不同页面装饰下产生相同哈希
+
+#### Scenario: 持久化正文为清洗后内容
+- **WHEN** 一篇通过采集判定的文章被写入政策数据库
+- **THEN** 存入 `content_text` 的是按 `<p>` 段落结构提取、剥离装饰后的正文，段落以换行分隔，不包含面包屑、来源页眉、编辑署名、推荐区块或跟踪 ID
+
+#### Scenario: 清洗不改变采集判定
+- **WHEN** 采集器对文章执行段落化提取与清洗
+- **THEN** 最小正文长度、关键词匹配等采集判定阈值与分类规则仍基于正文语义判定，清洗不导致原本接受的正文被拒绝或原本拒绝的正文被接受

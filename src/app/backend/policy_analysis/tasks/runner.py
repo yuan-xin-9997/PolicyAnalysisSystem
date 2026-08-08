@@ -161,7 +161,8 @@ class TaskRunner:
                         )
                         productive = True
                         continue
-                    content_hash = hashlib.sha256(classification.content.encode("utf-8")).hexdigest()
+                    body = self._paragraph_body(collector, candidate.url, classification.content, task_id)
+                    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
                     record = PolicyWrite(
                         source_id=config.source_id,
                         category_id=config.category_id,
@@ -169,7 +170,7 @@ class TaskRunner:
                         canonical_url=classification.canonical_url,
                         publisher=classification.publisher,
                         published_at=classification.published_at,
-                        content_text=classification.content,
+                        content_text=body,
                         content_hash=content_hash,
                         webfetch_artifact_id=classification.artifact_id,
                         crawled_at=self._aware_now(),
@@ -263,6 +264,43 @@ class TaskRunner:
             )
 
         self._policies.upsert_and_finalize(record, item_id, finalize)
+
+    def _paragraph_body(
+        self,
+        collector: XinhuaCollector,
+        url: str,
+        fallback: str,
+        task_id: int,
+    ) -> str:
+        """Fetch raw HTML and return the cleaned, paragraph-structured body.
+
+        WebFetch's ``generic.article`` adapter flattens the body into a single
+        space-joined line, so the raw HTML is fetched separately and parsed into
+        ``<p>`` paragraphs. Falls back to ``fallback`` (the inline-cleaned
+        flattened content) when the HTML fetch fails or no paragraphs can be
+        extracted, so a paragraph-fetch failure never blocks collection of an
+        otherwise-accepted article.
+        """
+        try:
+            html = self._webfetch.fetch_text(url)
+            body = collector.paragraph_body(html)
+        except (WebFetchClientError, ValueError):
+            self._repository.add_log(
+                task_id,
+                "warning",
+                "正文段落化抓取失败，回退扁平正文。",
+                {"candidate_url": url},
+            )
+            return fallback
+        if not body:
+            self._repository.add_log(
+                task_id,
+                "warning",
+                "正文段落解析为空，回退扁平正文。",
+                {"candidate_url": url},
+            )
+            return fallback
+        return body
 
     def _build_collector(self, config: _RunConfig) -> XinhuaCollector:
         if config.adapter_type != "xinhua":

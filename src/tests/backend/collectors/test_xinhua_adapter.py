@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from policy_analysis.collectors.base import DiscoveredLink, ExtractedArticle
-from policy_analysis.collectors.xinhua import XinhuaCollector, _clean_content
+from policy_analysis.collectors.xinhua import XinhuaCollector, _clean_content, extract_paragraphs
 
 FIXTURES = Path(__file__).with_name("fixtures")
 INCLUDE = ("中共中央政治局召开会议",)
@@ -306,7 +306,7 @@ def test_classification_rejection_reasons_are_stable_and_keep_context(
     assert result.reason_code == expected_reason
     assert result.canonical_url
     assert result.title == article.title
-    assert result.content == article.content
+    assert result.content == _clean_content(article.content)
     assert result.artifact_id == article.artifact_id
 
 
@@ -668,3 +668,99 @@ def test_classify_returns_cleaned_content_for_accepted_article() -> None:
     assert result.content.startswith("新华社北京7月30日电 中共中央政治局召开会议。")
     assert "来源：新华网" not in result.content
     assert "阅读下一篇" not in result.content
+
+
+def test_extract_paragraphs_recovers_p_blocks_from_detail_div() -> None:
+    html = (
+        "<html><body>"
+        '<div class="nav"><p>导航段落不应被收录</p></div>'
+        '<div id="detail">'
+        "<p>第一段政策正文。</p>"
+        "<p>第二段政策正文，含<b>内联标签</b>与<i>嵌套</i>。</p>"
+        "<p>第三段政策正文。</p>"
+        "</div></body></html>"
+    )
+
+    assert extract_paragraphs(html) == (
+        "第一段政策正文。\n第二段政策正文，含内联标签与嵌套。\n第三段政策正文。"
+    )
+
+
+def test_extract_paragraphs_falls_back_to_all_p_when_no_detail_div() -> None:
+    html = "<html><body><p>唯一段落正文。</p></body></html>"
+
+    assert extract_paragraphs(html) == "唯一段落正文。"
+
+
+def test_extract_paragraphs_returns_empty_when_no_p_blocks() -> None:
+    assert extract_paragraphs("<html><body><div>无段落</div></body></html>") == ""
+    assert extract_paragraphs("") == ""
+
+
+def test_clean_strips_real_double_arrow_header_with_spaced_timestamp() -> None:
+    content = "新华网 > > 正文 2022 12/ 14 11:37:37 来源：新华社 新时代的中国，日新月异。" + "内容。" * 5
+
+    assert _clean_content(content) == "新时代的中国，日新月异。" + "内容。" * 5
+
+
+def test_clean_strips_inline_editor_credits_and_correction_footer() -> None:
+    content = (
+        "新华社北京电 中共中央政治局召开会议。"
+        + "内容。" * 5
+        + " 策划：孙承斌 监制：孙志平 新华社音视频部制作 新华通讯社出品"
+        + " 【纠错】 【责任编辑:吴咏玲】"
+    )
+
+    assert _clean_content(content) == ("新华社北京电 中共中央政治局召开会议。" + "内容。" * 5)
+
+
+def test_clean_strips_credit_lines_in_paragraph_body() -> None:
+    content = (
+        "新华社北京电 中共中央政治局召开会议。\n"
+        "会议分析研究当前经济形势。\n"
+        "策划：孙承斌 监制：孙志平\n"
+        "新华通讯社出品"
+    )
+
+    assert _clean_content(content) == ("新华社北京电 中共中央政治局召开会议。\n会议分析研究当前经济形势。")
+
+
+def test_clean_strips_trailing_numeric_tracking_id() -> None:
+    content = (
+        "新华社北京电 中共中央政治局召开会议。"
+        + "内容。" * 5
+        + "\n010020020110000000000000011100001129207254"
+    )
+
+    assert _clean_content(content) == ("新华社北京电 中共中央政治局召开会议。" + "内容。" * 5)
+
+
+def test_clean_source_marker_glued_to_body_does_not_eat_body() -> None:
+    content = "来源：新华社中共中央政治局召开会议。" + "内容。" * 5
+
+    assert _clean_content(content) == "中共中央政治局召开会议。" + "内容。" * 5
+
+
+def test_paragraph_body_excludes_header_and_strips_residual_footer() -> None:
+    html = (
+        "<html><body>"
+        "新华网 > > 正文 2022 12/ 14 11:37:37 来源：新华社"
+        '<div id="detail">'
+        "<p>中共中央政治局召开会议，分析研究当前经济形势。</p>"
+        "<p>会议还研究了其他事项。</p>"
+        "</div>"
+        "策划：孙承斌 新华通讯社出品 阅读下一篇： 37 其他推荐"
+        "</body></html>"
+    )
+
+    body = _collector().paragraph_body(html)
+
+    assert body == ("中共中央政治局召开会议，分析研究当前经济形势。\n会议还研究了其他事项。")
+    assert "新华网 >" not in body
+    assert "来源：" not in body
+    assert "策划：" not in body
+    assert "阅读下一篇" not in body
+
+
+def test_paragraph_body_returns_empty_when_no_p_blocks() -> None:
+    assert _collector().paragraph_body("<html><body>无段落正文</body></html>") == ""

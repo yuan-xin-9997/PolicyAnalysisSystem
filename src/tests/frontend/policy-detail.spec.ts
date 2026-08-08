@@ -101,6 +101,27 @@ describe('政策详情', () => {
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
+  it('无原始换行的存量正文作为单段渲染并施加首行缩进，不执行 HTML', async () => {
+    // 模拟 WebFetch 扁平化正文或历史存量：单行无换行，且夹带 HTML 注入尝试。
+    const flat =
+      '新华社北京7月30日电 中共中央政治局召开会议，分析研究当前经济形势。会议还研究了其他事项。<img src=x onerror=alert(1)>'
+    stubPolicyDetail(flat)
+    render(PolicyDetailView, { props: { policyId: 7 } })
+
+    await screen.findByRole('heading', { name: '中共中央政治局召开会议' })
+    const paragraphs = screen
+      .getByRole('region', { name: '政策正文' })
+      .querySelectorAll('.policy-content p')
+    // 无换行 -> 整体作为单段渲染，不报错、不拆分。
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0].textContent).toBe(flat)
+    // 单段仍声明首行缩进。
+    expect(mainCss).toMatch(/\.policy-content\s+p\s*\{[^}]*text-indent:\s*2em/)
+    // 文本插值不执行 HTML：img 未被渲染为元素。
+    expect(document.querySelector('img')).toBeNull()
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+
   it('详情失败时展示后端安全错误', async () => {
     vi.stubGlobal(
       'fetch',

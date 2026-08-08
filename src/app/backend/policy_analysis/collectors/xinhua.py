@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree.ElementTree import ParseError
@@ -36,19 +37,39 @@ _OLD_URL_DATE = re.compile(r"/(20\d{2})-(\d{2})/(\d{2})(?:/|$)")
 _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
 
 # Patterns for stripping webpage page-chrome from extracted article bodies.
-# A decorative header segment is one of: a ">"-separated breadcrumb, a leading
-# timestamp, or a "来源：xxx" source marker -- the page header Xinhua prepends
-# (e.g. "新华网 > 时政 > 正文 2026 07/30 14:36:12 来源：新华网").
-_BREADCRUMB_SEGMENT = r"(?:[^\s>]+\s*>\s*)+[^\s>]+"
+# A decorative header segment is one of: a ">"-separated breadcrumb (incl. the
+# real double-">" variant "新华网 > > 正文"), a leading timestamp (incl. the
+# spaced-slash variant "2022 12/ 14 11:37:37"), a "来源：新华社/新华网" source
+# marker, or a "字体：小 中 大"/"分享到：" toolbar -- the page header Xinhua
+# prepends (e.g. "新华网 > > 正文 2022 12/ 14 11:37:37 来源：新华社").
+_BREADCRUMB_SEGMENT = r"(?:[^\s>]*\s*>\s*)+[^\s>]+"
 _TIMESTAMP_SEGMENT = (
-    r"\d{4}(?:[-/年.]\d{1,2}[-/月.]\d{1,2}日?|\s\d{1,2}/\d{1,2})"
+    r"\d{4}(?:[-/年.]\d{1,2}[-/月.]\d{1,2}日?|\s\d{1,2}/\s*\d{1,2})"
     r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"
 )
-_SOURCE_SEGMENT = r"来源：[^\s]+"
-_DECORATIVE_SEGMENT = rf"(?:{_BREADCRUMB_SEGMENT}|{_TIMESTAMP_SEGMENT}|{_SOURCE_SEGMENT})"
+# Bounded to known official source names so a source marker glued to body text
+# (no separating space) never eats the leading body paragraph.
+_SOURCE_SEGMENT = r"来源：(?:新华社|新华网|新华通讯社)"
+_TOOLBAR_SEGMENT = r"字体：\s*小\s*中\s*大|分享到："
+_DECORATIVE_SEGMENT = rf"(?:{_BREADCRUMB_SEGMENT}|{_TIMESTAMP_SEGMENT}|{_SOURCE_SEGMENT}|{_TOOLBAR_SEGMENT})"
 _DECORATIVE_LINE = re.compile(rf"^(?:{_DECORATIVE_SEGMENT}\s*)+$")
 _DECORATIVE_PREFIX = re.compile(rf"^\s*(?:{_DECORATIVE_SEGMENT}\s*)+")
 _READ_NEXT_MARKER = "阅读下一篇"
+# Trailing pure-numeric tracking ID Xinhua appends (e.g. "01002002011000…").
+_TRACKING_ID_TAIL = re.compile(r"\s*\d{16,}\s*$")
+_CORRECTION_MARKS = re.compile(r"【纠错】|【责任编辑[:：][^】]*】")
+# Inline editor-credit block ("策划：… 新华社音视频部制作 新华通讯社出品") as it
+# appears in the flattened single-line body; bounded so it cannot run away.
+_CREDIT_BLOCK = re.compile(
+    r"(?:策划|监制|制片|统筹|编导|记者|配音)[：:].{0,300}?"
+    r"(?:新华社音视频部制作\s*新华通讯社出品|新华社音视频部制作|新华通讯社出品)"
+)
+# A whole line that is an editor credit (line-based, for paragraph-structured body).
+_CREDIT_LINE = re.compile(
+    r"^(?:策划|监制|制片|统筹|编导|记者|配音|责任编辑)[：:]"
+    r"|^(?:新华社音视频部制作|新华通讯社出品)$"
+)
+_TOOLBAR_RE = re.compile(_TOOLBAR_SEGMENT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +228,16 @@ class XinhuaCollector:
             artifact_id=article.artifact_id,
         )
 
+    def paragraph_body(self, html: str) -> str:
+        """Return the cleaned, paragraph-structured body parsed from raw HTML.
+
+        Parses ``<p>`` blocks (via :func:`extract_paragraphs`) and cleans residual
+        page chrome. Returns an empty string when no paragraphs can be extracted,
+        signalling the caller to fall back to the inline-cleaned flattened
+        article text (``Classification.content``).
+        """
+        return _clean_content(extract_paragraphs(html))
+
     @staticmethod
     def _published_at(article: ExtractedArticle, canonical_url: str) -> datetime | None:
         parsed_hint = _first_datetime(article.published_hint)
@@ -303,10 +334,15 @@ def _collapsed(value: str) -> str:
 def _clean_content(content: str) -> str:
     """Strip webpage page-chrome from an extracted article body.
 
-    Removes the leading breadcrumb/timestamp/source header, the trailing
-    "阅读下一篇" recommendation block, and normalizes paragraph whitespace so
-    the stored body is pure policy text. Body-leading dates without a breadcrumb
-    or "来源：" marker are preserved (not mistaken for chrome).
+    Removes the leading breadcrumb/timestamp/source/toolbar header, the trailing
+    "阅读下一篇" recommendation block, editor-credit footers ("策划：… 出品"),
+    correction markers ("【纠错】"/"【责任编辑:xxx】"), and trailing numeric
+    tracking IDs; normalizes paragraph whitespace so the stored body is pure
+    policy text. Operates on both paragraph-structured text (newline-separated,
+    the primary path) and flattened single-line text (the fallback path) because
+    WebFetch's ``generic.article`` adapter joins paragraphs with single spaces.
+    Body-leading dates without a breadcrumb or "来源：" marker are preserved
+    (not mistaken for chrome).
     """
     if not isinstance(content, str) or not content:
         return content
@@ -316,27 +352,47 @@ def _clean_content(content: str) -> str:
     if marker != -1:
         text = text[:marker]
 
+    # Strip decorations that may appear inline within a line (flattened body) or
+    # as standalone lines (paragraph-structured body).
+    text = _CORRECTION_MARKS.sub(" ", text)
+    text = _CREDIT_BLOCK.sub(" ", text)
+    text = _TOOLBAR_RE.sub(" ", text)
+
     lines = text.splitlines()
 
-    # Drop leading blank lines and lines that are purely decorative
-    # (breadcrumb/timestamp/source). Skipping blanks first ensures a page
-    # header that follows a blank line is still detected and stripped, instead
-    # of stopping the scan at the blank and leaving the header in the body.
+    # Drop leading blank lines and lines that are purely decorative or editor
+    # credits. Skipping blanks first ensures a page header that follows a blank
+    # line is still detected and stripped, instead of stopping the scan at the
+    # blank and leaving the header in the body.
     start = 0
     while start < len(lines):
         stripped = lines[start].strip()
-        if stripped and not _DECORATIVE_LINE.match(stripped):
+        if stripped and not _DECORATIVE_LINE.match(stripped) and not _CREDIT_LINE.match(stripped):
             break
         start += 1
     lines = lines[start:]
 
+    # Drop trailing blank/credit-only lines.
+    while lines and (not lines[-1].strip() or _CREDIT_LINE.match(lines[-1].strip())):
+        lines.pop()
+
     # Strip an inline decorative prefix from the first remaining line, but only
-    # when it carries an unambiguous page-chrome signal (breadcrumb ">" or a
-    # "来源：" source marker) so a body-leading date is never removed.
+    # when it carries an unambiguous page-chrome signal (breadcrumb ">", a
+    # "来源：" source marker, or a font/share toolbar) so a body-leading date is
+    # never removed.
     if lines:
         match = _DECORATIVE_PREFIX.match(lines[0])
-        if match and (">" in match.group() or "来源：" in match.group()):
+        if match and (
+            ">" in match.group()
+            or "来源：" in match.group()
+            or "字体：" in match.group()
+            or "分享到：" in match.group()
+        ):
             lines[0] = lines[0][match.end() :]
+
+    # Strip a trailing pure-numeric tracking ID from the last line.
+    if lines:
+        lines[-1] = _TRACKING_ID_TAIL.sub("", lines[-1]).rstrip()
 
     # Normalize: strip each line, drop leading/trailing blank lines, collapse
     # runs of blank lines into a single blank line to preserve paragraph breaks.
@@ -353,6 +409,72 @@ def _clean_content(content: str) -> str:
     while normalized and not normalized[-1]:
         normalized.pop()
     return "\n".join(normalized)
+
+
+class _ParagraphParser(HTMLParser):
+    """Collect text from ``<p>`` blocks, preferring the article detail container.
+
+    WebFetch's ``generic.article`` adapter flattens the body into a single
+    space-joined line, discarding paragraph boundaries. This parser recovers
+    them from the raw HTML by reading ``<p>`` blocks inside ``<div id="detail">``
+    (falling back to all ``<p>`` blocks when no detail container is present),
+    which also naturally excludes most page chrome that lives outside ``<p>``.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._detail: list[str] = []
+        self._all: list[str] = []
+        self._detail_depth = 0
+        self._in_p = False
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        lowered = tag.casefold()
+        if lowered == "div":
+            attr_map = {key.casefold(): (value or "") for key, value in attrs}
+            if attr_map.get("id") == "detail" or "detail" in attr_map.get("class", ""):
+                self._detail_depth = 1
+            elif self._detail_depth:
+                self._detail_depth += 1
+        elif lowered == "p":
+            self._in_p = True
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_p:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.casefold()
+        if lowered == "p" and self._in_p:
+            self._in_p = False
+            text = " ".join("".join(self._text).split())
+            if text:
+                self._all.append(text)
+                if self._detail_depth:
+                    self._detail.append(text)
+            self._text = []
+        elif lowered == "div" and self._detail_depth:
+            self._detail_depth -= 1
+
+    def paragraphs(self) -> list[str]:
+        return self._detail if self._detail else self._all
+
+
+def extract_paragraphs(html: str) -> str:
+    """Extract article body paragraphs from raw HTML as newline-joined text.
+
+    Returns ``""`` when no ``<p>`` blocks are found, so callers can fall back to
+    the flattened article text. Has no I/O and raises no exception on malformed
+    HTML (the stdlib parser is lenient).
+    """
+    if not isinstance(html, str) or not html:
+        return ""
+    parser = _ParagraphParser()
+    parser.feed(html)
+    parser.close()
+    return "\n".join(parser.paragraphs())
 
 
 def _is_official_source(author: str, content: str) -> bool:

@@ -175,8 +175,8 @@ def test_runner_stores_verified_seed_with_real_item_and_short_transactions(task_
     result = runner(task_db, client).run(task_id)
 
     assert result.status is TaskStatus.SUCCEEDED
-    assert client.calls == ["https://www.news.cn/channel", url]
-    assert client.active_transactions == [False, False]
+    assert client.calls == ["https://www.news.cn/channel", url, url]
+    assert client.active_transactions == [False, False, False]
     with task_db() as db:
         task = db.get(CrawlTask, task_id)
         item = db.scalar(select(CrawlTaskItem).where(CrawlTaskItem.task_id == task_id))
@@ -206,6 +206,78 @@ def test_runner_persists_cleaned_content_and_hash_from_noisy_article(task_db) ->
         assert policy.content_hash == expected_hash
         assert "来源：新华社" not in policy.content_text
         assert "阅读下一篇" not in policy.content_text
+
+
+def test_runner_persists_paragraph_structured_body_recovered_from_html(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    task_id, _ = catalog(task_db, seed_urls=[(url, True, "中共中央政治局召开会议", date(2026, 8, 1))])
+    paras = [
+        "新华社北京8月1日电 中共中央政治局召开会议。",
+        "会议分析研究当前经济形势。",
+        "会议还研究了其他事项。",
+    ] + ["重要部署。"] * 5
+    # extract_article returns the WebFetch generic.article flattened body (single line, no newlines).
+    flat_content = "".join(paras)
+    client = FakeWebFetch(task_db, {url: article("2026-08-01", content=flat_content)})
+    # fetch_text returns the raw HTML with intact <p> structure plus page chrome.
+    paragraph_html = (
+        "<html><body>新华网 > > 正文 2026 08/01 10:00:00 来源：新华社"
+        '<div id="detail">'
+        + "".join(f"<p>{p}</p>" for p in paras)
+        + "</div>策划：孙承斌 新华通讯社出品 阅读下一篇： 37 其他推荐</body></html>"
+    )
+
+    def fetch_text(requested_url: str) -> str:
+        if requested_url == url:
+            return paragraph_html
+        return "<rss><channel></channel></rss>"  # discovery: no extra candidates
+
+    client.fetch_text = fetch_text
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    expected_body = "\n".join(paras)
+    expected_hash = hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+    with task_db() as db:
+        policy = db.scalar(select(Policy))
+        assert policy is not None
+        # The stored body is the paragraph-structured HTML body, not the flattened content.
+        assert policy.content_text == expected_body
+        assert policy.content_hash == expected_hash
+        assert "\n" in policy.content_text
+        for chrome in ("新华网 >", "来源：", "策划：", "新华通讯社出品", "阅读下一篇"):
+            assert chrome not in policy.content_text
+
+
+def test_runner_falls_back_to_flat_content_when_paragraph_fetch_fails(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    task_id, _ = catalog(task_db, seed_urls=[(url, True, "中共中央政治局召开会议", date(2026, 8, 1))])
+    noisy_body = (
+        "2026年8月1日 10:00:00 来源：新华社 "
+        "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30 + "\n阅读下一篇： 37 其他推荐标题"
+    )
+    client = FakeWebFetch(task_db, {url: article("2026-08-01", content=noisy_body)})
+
+    def fetch_text(requested_url: str) -> str:
+        if requested_url == url:
+            raise WebFetchClientError(code="WEBFETCH_UNAVAILABLE", message="段落抓取失败", retryable=True)
+        return "<rss><channel></channel></rss>"  # discovery succeeds with no extra candidates
+
+    client.fetch_text = fetch_text
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    expected_clean = "新华社北京8月1日电 中共中央政治局召开会议。" + "重要部署。" * 30
+    expected_hash = hashlib.sha256(expected_clean.encode("utf-8")).hexdigest()
+    with task_db() as db:
+        policy = db.scalar(select(Policy))
+        assert policy is not None
+        assert policy.content_text == expected_clean
+        assert policy.content_hash == expected_hash
+        logs = list(db.scalars(select(CrawlTaskLog).where(CrawlTaskLog.task_id == task_id)))
+        assert any("回退扁平正文" in log.message for log in logs)
 
 
 def test_runner_verified_seed_failure_overrides_partial_success_and_preserves_seed_identity(task_db) -> None:
