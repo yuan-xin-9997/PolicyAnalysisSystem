@@ -9,6 +9,7 @@ import {
 
 import AppLayout from '../layouts/AppLayout.vue'
 import { useAuthStore, type PageCode } from '../stores/auth'
+import AnalysisView from '../views/analysis/AnalysisView.vue'
 import LoginView from '../views/LoginView.vue'
 import NoAccessView from '../views/NoAccessView.vue'
 import PlaceholderView from '../views/PlaceholderView.vue'
@@ -52,7 +53,7 @@ const routes: RouteRecordRaw[] = [
         meta: { page: 'tasks' },
       },
       { path: 'push', name: 'push', component: PlaceholderView, props: { page: 'push' }, meta: { page: 'push' } },
-      { path: 'analysis', name: 'analysis', component: PlaceholderView, props: { page: 'analysis' }, meta: { page: 'analysis' } },
+      { path: 'analysis', name: 'analysis', component: AnalysisView, meta: { page: 'analysis' } },
       { path: 'users', name: 'users', component: UsersView, meta: { page: 'users' } },
       { path: 'settings', name: 'settings', component: SettingsView, meta: { page: 'settings' } },
       { path: 'no-access', name: 'no-access', component: NoAccessView },

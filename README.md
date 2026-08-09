@@ -125,6 +125,26 @@ npm --prefix src/app/frontend run test:e2e
 
 接口均要求登录并具有政策数据库页面权限。页面显示时间统一转换为北京时间。需求行为与技术决策分别维护在 OpenSpec 变更的 `specs/policy-database-experience/spec.md` 和 `design.md` 中。
 
+## 政策分析页面
+
+政策分析页面为有 `analysis` 页面权限的用户提供基于政策正文的词频分析能力：
+
+- 在政策数据库页面勾选一篇或多篇政策，点击「分词分析」创建分析任务（支持跨页保留选中）；
+- 后台异步执行中文分词（jieba）、停用词过滤、词频统计、TF-IDF（以选中政策集合为语料）与关键词共现计算；
+- 任务完成后提供三个视图：词频排行（支持按频次/TF-IDF 排序）、词云（ECharts wordCloud）、关键词关系图（ECharts Graph 力导向）；
+- 页面内展示任务状态与历史分析任务列表，所有时间以北京时间显示。
+
+相关 API：
+
+- `POST /api/v1/analysis/tasks`：创建分析任务，body `{ policy_ids: [...] }`，返回 `{ task_id, status }`（需 CSRF 与 analysis 页面权限）；
+- `GET /api/v1/analysis/tasks`：历史任务分页列表；
+- `GET /api/v1/analysis/tasks/{task_id}`：任务状态详情；
+- `GET /api/v1/analysis/tasks/{task_id}/words?top=50&sort_by=frequency|tfidf`：聚合词频结果；
+- `GET /api/v1/analysis/tasks/{task_id}/relations?top=50`：关键词共现关系与节点；
+- `GET /api/v1/analysis/tasks/{task_id}/logs`：任务日志。
+
+分析任务在独立线程池执行（`analysis.max_workers` 可配，默认 1），与采集任务解耦；单次任务政策数上限 `analysis.max_policies_per_task`（默认 100）。配置项见 `src/config/app.json` 的 `analysis` 节。
+
 ## 政策采集后端
 
 采集后端通过 WebFetch 服务获取 RSS、栏目页面和文章正文。运行前需要配置：

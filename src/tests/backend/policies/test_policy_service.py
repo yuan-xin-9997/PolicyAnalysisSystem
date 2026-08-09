@@ -612,7 +612,7 @@ def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(
     sessions = session_factory(engine)
     try:
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
             sql = connection.execute(
                 text("SELECT sql FROM sqlite_master WHERE name = 'policies_fts'")
             ).scalar_one()
@@ -676,7 +676,7 @@ def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(
     upgraded = build_engine(database_path)
     try:
         with upgraded.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
             assert (
                 connection.execute(
                     text("SELECT count(*) FROM policies_fts WHERE policies_fts MATCH :query"),

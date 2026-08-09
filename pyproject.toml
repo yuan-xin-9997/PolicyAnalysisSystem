@@ -15,6 +15,7 @@ dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "idna>=3.10,<4",
+  "jieba>=0.42,<1",
   "pydantic>=2.10,<3",
   "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.34,<1",
@@ -31,6 +32,7 @@ dev = [
 where = ["src/app/backend"]
 
 [tool.setuptools.package-data]
+"policy_analysis.analysis.resources" = ["*.json"]
 "policy_analysis.collectors.resources" = ["*.json"]
 
 [tool.pytest.ini_options]

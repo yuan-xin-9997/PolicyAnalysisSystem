@@ -153,3 +153,67 @@ export interface EffectiveSettings {
   sources: Record<string, string>
   webfetch: { status: 'ready' | 'unavailable' | 'configured' | 'not_configured'; checked: boolean }
 }
+
+export type AnalysisTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+
+export interface AnalysisTaskSummary {
+  id: number
+  task_type: string
+  status: AnalysisTaskStatus
+  policy_count: number
+  requested_by: number | null
+  started_at: string | null
+  finished_at: string | null
+  error_summary: string | null
+  created_at: string
+}
+
+export interface AnalysisTaskPage {
+  items: AnalysisTaskSummary[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface CreateAnalysisTaskResponse {
+  task_id: number
+  status: AnalysisTaskStatus
+}
+
+export interface WordFrequencyItem {
+  word: string
+  frequency: number
+  tfidf: number
+  doc_count: number
+}
+
+export interface WordFrequencyResult {
+  items: WordFrequencyItem[]
+  total: number
+}
+
+export interface WordRelationItem {
+  word1: string
+  word2: string
+  co_count: number
+}
+
+export interface WordRelationResult {
+  items: WordRelationItem[]
+  nodes: string[]
+}
+
+export interface AnalysisTaskLogItem {
+  id: number
+  level: 'debug' | 'info' | 'warning' | 'error'
+  message: string
+  context: Record<string, unknown>
+  created_at: string
+}
+
+export interface AnalysisTaskLogPage {
+  items: AnalysisTaskLogItem[]
+  total: number
+  page: number
+  page_size: number
+}

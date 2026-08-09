@@ -50,5 +50,14 @@ def require_page(required: PageCode) -> Callable[..., PublicUser]:
     return dependency
 
 
+def require_page_csrf(required: PageCode) -> Callable[..., PublicUser]:
+    def dependency(session: AuthenticatedSession = Depends(require_csrf_session)) -> PublicUser:
+        if not can_access(session.user.role, set(session.user.page_permissions), required):
+            raise _permission_denied()
+        return session.user
+
+    return dependency
+
+
 def _permission_denied() -> APIError:
     return APIError(status_code=403, code="PERMISSION_DENIED", message="无权访问此资源。")

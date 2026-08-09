@@ -58,6 +58,13 @@ class PaginationSettings(StrictSettingsModel):
         return self
 
 
+class AnalysisSettings(StrictSettingsModel):
+    max_workers: int = Field(default=1, ge=1, le=4)
+    top_words_default: int = Field(default=50, ge=1, le=500)
+    min_word_length: int = Field(default=2, ge=1, le=10)
+    max_policies_per_task: int = Field(default=100, ge=1, le=1000)
+
+
 class AppSettings(StrictSettingsModel):
     server: ServerSettings = Field(default_factory=ServerSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -65,6 +72,7 @@ class AppSettings(StrictSettingsModel):
     webfetch: WebFetchSettings = Field(default_factory=WebFetchSettings)
     tasks: TaskSettings = Field(default_factory=TaskSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
+    analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
 
 
 @dataclass(frozen=True, slots=True)

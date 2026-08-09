@@ -18,5 +18,11 @@
   "pagination": {
     "default_page_size": 50,
     "max_page_size": 100
+  },
+  "analysis": {
+    "max_workers": 1,
+    "top_words_default": 50,
+    "min_word_length": 2,
+    "max_policies_per_task": 100
   }
 }

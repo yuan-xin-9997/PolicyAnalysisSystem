@@ -14,6 +14,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import Engine
 
+from policy_analysis.analysis.repository import AnalysisRepository
+from policy_analysis.analysis.routes import router as analysis_router
+from policy_analysis.analysis.runner import AnalysisRunner
+from policy_analysis.analysis.worker import AnalysisWorker
 from policy_analysis.auth.routes import router as auth_router
 from policy_analysis.auth.routes import users_router
 from policy_analysis.auth.service import AuthService, UserAdministrationService, UserSyncService
@@ -66,6 +70,7 @@ def create_app(
         try:
             task_worker: TaskWorker | None = None
             task_scheduler: TaskScheduler | None = None
+            analysis_worker: AnalysisWorker | None = None
             snapshot = load_settings_snapshot(
                 resolved_config_path,
                 resolved_project_root,
@@ -97,12 +102,18 @@ def create_app(
                 app.state.task_scheduler = task_scheduler
                 task_worker.start()
                 task_scheduler.start()
+                analysis_worker = _build_analysis_worker(service.sessions, snapshot.settings)
+                AnalysisRepository(service.sessions).recover_interrupted(datetime_now_utc())
+                app.state.analysis_worker = analysis_worker
+                analysis_worker.start()
             yield
         finally:
             if task_scheduler is not None:
                 task_scheduler.shutdown(wait=False)
             if task_worker is not None:
                 task_worker.shutdown(wait=True)
+            if analysis_worker is not None:
+                analysis_worker.shutdown(wait=True)
             if owns_runtime:
                 app.state.settings = None
                 app.state.settings_sources = None
@@ -113,6 +124,7 @@ def create_app(
                 app.state.database_sessions = None
                 app.state.task_worker = None
                 app.state.task_scheduler = None
+                app.state.analysis_worker = None
             if owns_runtime and engine is not None:
                 engine.dispose()
 
@@ -128,6 +140,7 @@ def create_app(
     app.state.build_metadata = None
     app.state.task_worker = None
     app.state.task_scheduler = None
+    app.state.analysis_worker = None
     app.state.project_root = resolved_project_root
     app.state.frontend_dist = resolved_frontend_dist
     install_error_handlers(app)
@@ -137,6 +150,7 @@ def create_app(
     app.include_router(policies_router)
     app.include_router(sources_router)
     app.include_router(tasks_router)
+    app.include_router(analysis_router)
     app.include_router(system_router)
     app.include_router(health_router)
     _install_spa_routes(app, resolved_frontend_dist)
@@ -176,6 +190,24 @@ def _build_task_worker(sessions, settings: AppSettings) -> TaskWorker:
         sessions,
         runner_factory=runner_factory,
         max_workers=settings.tasks.max_workers,
+    )
+
+
+def _build_analysis_worker(sessions, settings: AppSettings) -> AnalysisWorker:
+    analysis = settings.analysis
+
+    def runner_factory():
+        runner = AnalysisRunner(
+            sessions,
+            min_word_length=analysis.min_word_length,
+            top_words_default=analysis.top_words_default,
+        )
+        return runner.run_claimed
+
+    return AnalysisWorker(
+        sessions,
+        runner_factory=runner_factory,
+        max_workers=analysis.max_workers,
     )
 
 

@@ -30,12 +30,13 @@ def build_engine(database_path: Path) -> Engine:
 
 
 def create_schema(engine: Engine) -> None:
+    from policy_analysis.analysis import models as analysis_models
     from policy_analysis.auth import models as auth_models
     from policy_analysis.policies import models as policy_models
     from policy_analysis.sources import models as source_models
     from policy_analysis.tasks import models as task_models
 
-    del auth_models, policy_models, source_models, task_models
+    del analysis_models, auth_models, policy_models, source_models, task_models
     Base.metadata.create_all(engine)
 
 

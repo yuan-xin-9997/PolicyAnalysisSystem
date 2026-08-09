@@ -36,6 +36,12 @@ export async function installMockApi(page: Page): Promise<void> {
     if (path === '/api/v1/sources') return fulfillJson(route, [source()])
     if (path === '/api/v1/policy-categories') return fulfillJson(route, [category()])
     if (path === '/api/v1/schedules') return fulfillJson(route, [])
+    if (path === '/api/v1/analysis/tasks' && method === 'POST') return fulfillJson(route, { task_id: 51, status: 'pending' })
+    if (path === '/api/v1/analysis/tasks' && method === 'GET') return fulfillJson(route, analysisTaskPage())
+    if (path === '/api/v1/analysis/tasks/51') return fulfillJson(route, analysisTask(51))
+    if (path === '/api/v1/analysis/tasks/51/words') return fulfillJson(route, analysisWords())
+    if (path === '/api/v1/analysis/tasks/51/relations') return fulfillJson(route, analysisRelations())
+    if (path === '/api/v1/analysis/tasks/51/logs') return fulfillJson(route, analysisLogs())
     return fulfillJson(route, error('NOT_FOUND', `未模拟接口：${path}`), 404)
   })
 }
@@ -177,6 +183,51 @@ function taskItems(): object {
 function taskLogs(): object {
   return {
     items: [{ id: 1, level: 'info', message: '采集完成', context: {}, created_at: '2026-07-31T04:01:00Z' }],
+    total: 1,
+    page: 1,
+    page_size: 50,
+  }
+}
+
+function analysisTask(id: number): object {
+  return {
+    id,
+    task_type: 'word_frequency',
+    status: 'succeeded',
+    policy_count: 2,
+    requested_by: 1,
+    started_at: '2026-07-31T04:00:00Z',
+    finished_at: '2026-07-31T04:01:00Z',
+    error_summary: null,
+    created_at: '2026-07-31T04:00:00Z',
+  }
+}
+
+function analysisTaskPage(): object {
+  return { items: [analysisTask(51)], total: 1, page: 1, page_size: 20 }
+}
+
+function analysisWords(): object {
+  return {
+    items: [
+      { word: '人工智能', frequency: 12, tfidf: 0.92, doc_count: 2 },
+      { word: '产业', frequency: 9, tfidf: 0.45, doc_count: 2 },
+      { word: '数字经济', frequency: 6, tfidf: 0.7, doc_count: 1 },
+    ],
+    total: 3,
+  }
+}
+
+function analysisRelations(): object {
+  return {
+    items: [{ word1: '产业', word2: '人工智能', co_count: 2 }],
+    nodes: ['人工智能', '产业', '数字经济'],
+  }
+}
+
+function analysisLogs(): object {
+  return {
+    items: [{ id: 1, level: 'info', message: '词频分析完成。', context: {}, created_at: '2026-07-31T04:01:00Z' }],
     total: 1,
     page: 1,
     page_size: 50,

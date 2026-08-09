@@ -230,3 +230,6 @@ htmlcov/
 .coverage
 coverage.xml
 src/logs/
+
+# Claude Code local config (user-level skills/commands)
+.claude/

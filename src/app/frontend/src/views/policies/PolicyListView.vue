@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { ApiError, apiRequest } from '../../api/client'
-import type { Page, PolicyFilterOptions, PolicySummary } from '../../api/types'
+import type { CreateAnalysisTaskResponse, Page, PolicyFilterOptions, PolicySummary } from '../../api/types'
 import { formatBeijingTime } from '../../utils/time'
 import {
   defaultPolicyQuery,
@@ -21,7 +21,54 @@ const filterErrorMessage = ref('')
 const policies = ref<PolicySummary[]>([])
 const filterOptions = ref<PolicyFilterOptions>({ publishers: [], categories: [], sources: [] })
 const total = ref(0)
+const selectedIds = ref<number[]>([])
+const submitting = ref(false)
+const submitError = ref('')
 let policyRequestId = 0
+
+const allSelected = computed(
+  () =>
+    policies.value.length > 0 &&
+    policies.value.every((policy) => selectedIds.value.includes(policy.id)),
+)
+
+function toggleAll(): void {
+  const currentIds = policies.value.map((policy) => policy.id)
+  if (currentIds.every((id) => selectedIds.value.includes(id))) {
+    selectedIds.value = selectedIds.value.filter((id) => !currentIds.includes(id))
+  } else {
+    selectedIds.value = [...new Set([...selectedIds.value, ...currentIds])]
+  }
+}
+
+function toggleOne(id: number): void {
+  if (selectedIds.value.includes(id)) {
+    selectedIds.value = selectedIds.value.filter((value) => value !== id)
+  } else {
+    selectedIds.value = [...selectedIds.value, id]
+  }
+}
+
+async function startAnalysis(): Promise<void> {
+  if (selectedIds.value.length === 0) {
+    submitError.value = '请至少选择一篇政策。'
+    return
+  }
+  submitError.value = ''
+  submitting.value = true
+  try {
+    const result = await apiRequest<CreateAnalysisTaskResponse>('/analysis/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ policy_ids: selectedIds.value }),
+    })
+    selectedIds.value = []
+    await router.push({ name: 'analysis', query: { taskId: String(result.task_id) } })
+  } catch (error) {
+    submitError.value = error instanceof ApiError ? error.message : '创建分析任务失败。'
+  } finally {
+    submitting.value = false
+  }
+}
 
 onMounted(() => {
   void Promise.all([loadFilterOptions(), loadPolicies()])
@@ -193,6 +240,17 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
       </div>
     </form>
 
+    <div class="analysis-bar">
+      <button
+        type="button"
+        :disabled="submitting || selectedIds.length === 0"
+        @click="startAnalysis"
+      >
+        分词分析<template v-if="selectedIds.length > 0">（已选 {{ selectedIds.length }} 篇）</template>
+      </button>
+      <span v-if="submitError" role="alert" class="filter-error">{{ submitError }}</span>
+    </div>
+
     <p v-if="filterErrorMessage" role="alert" class="filter-error">{{ filterErrorMessage }}</p>
 
     <p v-if="loading" role="status" class="state-card">正在加载政策</p>
@@ -201,6 +259,14 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
     <table v-else class="data-table">
       <thead>
         <tr>
+          <th class="select-col">
+            <input
+              type="checkbox"
+              :checked="allSelected"
+              :aria-label="allSelected ? '取消全选当前页' : '全选当前页'"
+              @change="toggleAll"
+            />
+          </th>
           <th>标题</th>
           <th>发布部门</th>
           <th>类别</th>
@@ -227,6 +293,14 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
       </thead>
       <tbody>
         <tr v-for="policy in policies" :key="policy.id">
+          <td class="select-col">
+            <input
+              type="checkbox"
+              :checked="selectedIds.includes(policy.id)"
+              :aria-label="`选择 ${policy.title}`"
+              @change="toggleOne(policy.id)"
+            />
+          </td>
           <td>
             <RouterLink :to="{ name: 'policy-detail', params: { policyId: policy.id } }">
               {{ policy.title }}

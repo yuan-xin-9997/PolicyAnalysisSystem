@@ -281,4 +281,41 @@ describe('政策列表', () => {
     await renderList()
     expect(await screen.findByRole('alert')).toHaveTextContent('政策查询参数无效。')
   })
+
+  it('勾选政策并创建分词分析任务', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/policies/filters')) return Promise.resolve(jsonResponse(filterOptions()))
+      if (url.includes('/policies')) return Promise.resolve(jsonResponse(policyPage()))
+      if (url.includes('/analysis/tasks'))
+        return Promise.resolve(jsonResponse({ task_id: 51, status: 'pending' }))
+      return Promise.resolve(jsonResponse({}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/policies', name: 'policies', component: PolicyListView },
+        { path: '/policies/:policyId', name: 'policy-detail', component: PolicyDetailView },
+        { path: '/analysis', name: 'analysis', component: { template: '<div>analysis</div>' } },
+      ],
+    })
+    await router.push('/policies')
+    render(PolicyListView, { global: { plugins: [router] } })
+
+    expect(await screen.findByText('中共中央政治局召开会议')).toBeInTheDocument()
+    await fireEvent.click(screen.getByLabelText('选择 中共中央政治局召开会议'))
+    await fireEvent.click(screen.getByRole('button', { name: /分词分析/ }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            String(call[0]).includes('/analysis/tasks') &&
+            (call[1] as RequestInit | undefined)?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('analysis'))
+  })
 })

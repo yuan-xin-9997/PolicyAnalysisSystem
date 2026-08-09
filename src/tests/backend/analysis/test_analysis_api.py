@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from fastapi.testclient import TestClient
+from policy_analysis.analysis.repository import AnalysisRepository
+from policy_analysis.analysis.runner import AnalysisRunner
+from policy_analysis.auth.models import PagePermission, User
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+NOW = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+
+
+def csrf(client: TestClient) -> dict[str, str]:
+    return client.csrf_headers  # type: ignore[attr-defined, no-any-return]
+
+
+def grant_analysis_page(database_sessions: sessionmaker[Session], username: str = "reader") -> None:
+    with database_sessions.begin() as database:
+        user = database.scalar(select(User).where(User.username == username))
+        assert user is not None
+        database.add(PagePermission(user_id=user.id, page_code="analysis"))
+
+
+class FakeWorker:
+    is_started = True
+    can_run_tasks = True
+
+    def __init__(self) -> None:
+        self.submitted = 0
+
+    def submit_next(self) -> None:
+        self.submitted += 1
+
+
+def _run_task(database_sessions: sessionmaker[Session], task_id: int) -> None:
+    repository = AnalysisRepository(database_sessions)
+    repository.claim_next(NOW)
+    AnalysisRunner(database_sessions, now=lambda: NOW).run_claimed(task_id)
+
+
+def test_analysis_api_create_status_results_logs(
+    admin_client: TestClient,
+    auth_app,
+    database_sessions: sessionmaker[Session],
+    policy_id: int,
+) -> None:
+    worker = FakeWorker()
+    auth_app.state.analysis_worker = worker
+    created = admin_client.post(
+        "/api/v1/analysis/tasks",
+        json={"policy_ids": [policy_id]},
+        headers=csrf(admin_client),
+    )
+    assert created.status_code == 200
+    assert worker.submitted == 1
+    task_id = created.json()["task_id"]
+    assert created.json()["status"] == "pending"
+
+    _run_task(database_sessions, task_id)
+
+    status = admin_client.get(f"/api/v1/analysis/tasks/{task_id}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+
+    words = admin_client.get(f"/api/v1/analysis/tasks/{task_id}/words?top=10")
+    assert words.status_code == 200
+    assert len(words.json()["items"]) > 0
+
+    relations = admin_client.get(f"/api/v1/analysis/tasks/{task_id}/relations?top=10")
+    assert relations.status_code == 200
+
+    logs = admin_client.get(f"/api/v1/analysis/tasks/{task_id}/logs")
+    assert logs.status_code == 200
+    assert logs.json()["total"] >= 1
+
+
+def test_analysis_api_lists_history(admin_client: TestClient, auth_app, policy_id: int) -> None:
+    auth_app.state.analysis_worker = FakeWorker()
+    admin_client.post(
+        "/api/v1/analysis/tasks",
+        json={"policy_ids": [policy_id]},
+        headers=csrf(admin_client),
+    )
+    listed = admin_client.get("/api/v1/analysis/tasks")
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+
+
+def test_analysis_api_permissions_and_csrf(
+    client: TestClient,
+    admin_client: TestClient,
+    user_client: TestClient,
+    database_sessions: sessionmaker[Session],
+    policy_id: int,
+) -> None:
+    assert client.get("/api/v1/analysis/tasks").status_code == 401
+    assert user_client.get("/api/v1/analysis/tasks").status_code == 403
+    grant_analysis_page(database_sessions)
+    assert user_client.get("/api/v1/analysis/tasks").status_code == 200
+    assert admin_client.post("/api/v1/analysis/tasks", json={"policy_ids": [policy_id]}).status_code == 403
+    assert (
+        admin_client.post(
+            "/api/v1/analysis/tasks", json={"policy_ids": []}, headers=csrf(admin_client)
+        ).status_code
+        == 422
+    )
+    missing = admin_client.post(
+        "/api/v1/analysis/tasks",
+        json={"policy_ids": [999999]},
+        headers=csrf(admin_client),
+    )
+    assert missing.status_code == 404
+
+
+def test_analysis_api_rejects_over_schema_limit(admin_client: TestClient, auth_app, policy_id: int) -> None:
+    auth_app.state.analysis_worker = FakeWorker()
+    response = admin_client.post(
+        "/api/v1/analysis/tasks",
+        json={"policy_ids": [policy_id] * 101},
+        headers=csrf(admin_client),
+    )
+    assert response.status_code == 422
+
+
+def test_analysis_api_rejects_over_configured_limit(
+    admin_client: TestClient, auth_app, policy_id: int
+) -> None:
+    auth_app.state.analysis_worker = FakeWorker()
+    settings = auth_app.state.settings
+    analysis = settings.analysis.model_copy(update={"max_policies_per_task": 1})
+    auth_app.state.settings = settings.model_copy(update={"analysis": analysis})
+    response = admin_client.post(
+        "/api/v1/analysis/tasks",
+        json={"policy_ids": [policy_id, policy_id]},
+        headers=csrf(admin_client),
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "ANALYSIS_TOO_MANY_POLICIES"
