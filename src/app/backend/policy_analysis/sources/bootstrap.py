@@ -1,9 +1,17 @@
-"""Strict, offline loading and idempotent import of packaged seed URLs."""
+"""Strict, offline loading and idempotent import of packaged seed URLs.
+
+Each collection scenario is described by a :class:`ScenarioSpec` that binds
+together its policy category, source/rule defaults, seed manifest resource,
+and validation rules. ``load_seed_manifest`` and ``bootstrap_default_catalog``
+operate uniformly over the registered scenarios, so a new rule can be added by
+introducing a single :class:`ScenarioSpec` -- no other code changes required.
+"""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -20,39 +28,93 @@ from policy_analysis.sources.service import SourceService
 from policy_analysis.sources.url_validation import normalized_http_hostname
 
 _RESOURCE_PACKAGE = "policy_analysis.collectors.resources"
-_RESOURCE_NAME = "xinhua_politburo_seed_urls.json"
+
 _ALLOWED_HOSTS = frozenset({"news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"})
-_REQUIRED_TITLE_PREFIX = "中共中央政治局召开会议"
-_EARLIEST_DATE = date(2021, 8, 1)
-_LATEST_DATE = date(2026, 8, 1)
+
 _OLD_URL_DATE = re.compile(r"/(20\d{2})-(\d{2})/(\d{2})(?:/|$)")
 _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
+
 _MANIFEST_ADAPTER = TypeAdapter(list[SeedUrlImport])
-_DEFAULT_CATEGORY_CODE = "politburo_meeting"
+
 _DEFAULT_SOURCE_CODE = "xinhua"
-_DEFAULT_RULE_NAME = "中央政治局会议"
-_DEFAULT_INCLUDE_KEYWORDS = ["中共中央政治局召开会议"]
+_DEFAULT_SOURCE_NAME = "新华网"
+_DEFAULT_SOURCE_ORGANIZATION = "新华社"
+_DEFAULT_SOURCE_BASE_URL = "https://news.cn/"
+_DEFAULT_SOURCE_ADAPTER = "xinhua"
+_DEFAULT_ALLOWED_DOMAINS = ["news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"]
 _DEFAULT_EXCLUDE_KEYWORDS = ["视频"]
 _DEFAULT_DISCOVERY = {
     "rss_urls": ["https://www.news.cn/rss/politics.xml"],
     "channel_urls": ["https://www.news.cn/politics/leaders/index.htm"],
 }
-_DEFAULT_ALLOWED_DOMAINS = ["news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"]
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioSpec:
+    """A single collection scenario: how to validate, seed, and bootstrap it."""
+
+    key: str
+    resource_name: str
+    category_code: str
+    category_name: str
+    category_description: str
+    rule_name: str
+    include_keywords: tuple[str, ...]
+    history_years: int
+    earliest_date: date
+    latest_date: date
+    title_must_contain: tuple[str, ...]
+    title_must_not_end_with: tuple[str, ...] = ("-新华网",)
+
+
+POLITBURO_SPEC = ScenarioSpec(
+    key="politburo",
+    resource_name="xinhua_politburo_seed_urls.json",
+    category_code="politburo_meeting",
+    category_name="中央政治局会议",
+    category_description="新华社中央政治局会议通报",
+    rule_name="中央政治局会议",
+    include_keywords=("中共中央政治局召开会议",),
+    history_years=5,
+    earliest_date=date(2021, 8, 1),
+    latest_date=date(2026, 8, 1),
+    title_must_contain=("中共中央政治局召开会议",),
+)
+
+FINANCE_COUNCIL_SPEC = ScenarioSpec(
+    key="finance_council",
+    resource_name="xinhua_finance_council_seed_urls.json",
+    category_code="finance_council_meeting",
+    category_name="中央财经委员会会议",
+    category_description="新华社中央财经委员会会议通报",
+    rule_name="中央财经委员会会议",
+    include_keywords=("中央财经委员会",),
+    history_years=9,
+    earliest_date=date(2018, 4, 1),
+    latest_date=date(2026, 8, 1),
+    title_must_contain=("中央财经委员会",),
+)
+
+DEFAULT_SCENARIOS: tuple[ScenarioSpec, ...] = (POLITBURO_SPEC, FINANCE_COUNCIL_SPEC)
+DEFAULT_SCENARIO = POLITBURO_SPEC
 
 
 class SeedManifestError(ValueError):
     """A stable error for an unreadable or invalid all-or-nothing manifest."""
 
 
-def load_seed_manifest(path: Path | None = None) -> tuple[SeedUrlImport, ...]:
+def load_seed_manifest(
+    path: Path | None = None,
+    spec: ScenarioSpec = DEFAULT_SCENARIO,
+) -> tuple[SeedUrlImport, ...]:
     """Load and strictly validate a packaged or explicitly supplied manifest."""
 
     try:
-        payload = _read_manifest(path)
+        payload = _read_manifest(path, spec)
         raw_entries = _parse_raw_manifest(payload)
         entries = _MANIFEST_ADAPTER.validate_json(payload)
         _validate_raw_values(raw_entries, entries)
-        _validate_entries(entries)
+        _validate_entries(entries, spec)
     except (ImportError, OSError, UnicodeError, ValidationError, ValueError):
         raise SeedManifestError("seed manifest invalid") from None
     return tuple(entries)
@@ -62,40 +124,44 @@ def import_seed_manifest(
     source_service: SourceService,
     rule_id: int,
     path: Path | None = None,
+    spec: ScenarioSpec = DEFAULT_SCENARIO,
 ) -> SeedImportResult:
     """Load the entire manifest, then delegate its idempotent transaction."""
 
-    entries = load_seed_manifest(path)
+    entries = load_seed_manifest(path, spec)
     return source_service.import_seed_urls(rule_id, entries)
 
 
-def bootstrap_default_catalog(sessions: sessionmaker[Session]) -> SeedImportResult:
-    """Ensure the first-phase Xinhua Politburo meeting scenario is visible and runnable."""
+def bootstrap_default_catalog(sessions: sessionmaker[Session]) -> dict[str, SeedImportResult]:
+    """Ensure every default scenario has a category, source, rule, and seed manifest."""
 
-    with sessions.begin() as session:
-        category = _ensure_default_category(session)
-        source = _ensure_default_source(session)
-        session.flush()
-        rule = _ensure_default_rule(session, source, category)
-        session.flush()
-        rule_id = rule.id
-    return import_seed_manifest(SourceService(sessions), rule_id)
+    results: dict[str, SeedImportResult] = {}
+    for spec in DEFAULT_SCENARIOS:
+        with sessions.begin() as session:
+            category = _ensure_category(session, spec)
+            source = _ensure_default_source(session)
+            session.flush()
+            rule = _ensure_rule(session, source, category, spec)
+            session.flush()
+            rule_id = rule.id
+        results[spec.key] = import_seed_manifest(SourceService(sessions), rule_id, spec=spec)
+    return results
 
 
-def _read_manifest(path: Path | None) -> bytes:
+def _read_manifest(path: Path | None, spec: ScenarioSpec) -> bytes:
     if path is not None:
         return path.read_bytes().decode("utf-8").encode("utf-8")
-    resource = resources.files(_RESOURCE_PACKAGE).joinpath(_RESOURCE_NAME)
+    resource = resources.files(_RESOURCE_PACKAGE).joinpath(spec.resource_name)
     return resource.read_bytes().decode("utf-8").encode("utf-8")
 
 
-def _ensure_default_category(session: Session) -> PolicyCategory:
-    category = session.scalar(select(PolicyCategory).where(PolicyCategory.code == _DEFAULT_CATEGORY_CODE))
+def _ensure_category(session: Session, spec: ScenarioSpec) -> PolicyCategory:
+    category = session.scalar(select(PolicyCategory).where(PolicyCategory.code == spec.category_code))
     if category is None:
         category = PolicyCategory(
-            code=_DEFAULT_CATEGORY_CODE,
-            name="中央政治局会议",
-            description="新华社中央政治局会议通报",
+            code=spec.category_code,
+            name=spec.category_name,
+            description=spec.category_description,
             is_active=True,
         )
         session.add(category)
@@ -107,10 +173,10 @@ def _ensure_default_source(session: Session) -> Source:
     if source is None:
         source = Source(
             code=_DEFAULT_SOURCE_CODE,
-            name="新华网",
-            organization="新华社",
-            base_url="https://news.cn/",
-            adapter_type="xinhua",
+            name=_DEFAULT_SOURCE_NAME,
+            organization=_DEFAULT_SOURCE_ORGANIZATION,
+            base_url=_DEFAULT_SOURCE_BASE_URL,
+            adapter_type=_DEFAULT_SOURCE_ADAPTER,
             allowed_domains_json=_encode_json(_DEFAULT_ALLOWED_DOMAINS),
             is_active=True,
         )
@@ -118,10 +184,12 @@ def _ensure_default_source(session: Session) -> Source:
     return source
 
 
-def _ensure_default_rule(session: Session, source: Source, category: PolicyCategory) -> CollectionRule:
+def _ensure_rule(
+    session: Session, source: Source, category: PolicyCategory, spec: ScenarioSpec
+) -> CollectionRule:
     rule = session.scalar(
         select(CollectionRule)
-        .where(CollectionRule.name == _DEFAULT_RULE_NAME)
+        .where(CollectionRule.name == spec.rule_name)
         .where(CollectionRule.source_id == source.id)
         .where(CollectionRule.category_id == category.id)
     )
@@ -129,10 +197,10 @@ def _ensure_default_rule(session: Session, source: Source, category: PolicyCateg
         rule = CollectionRule(
             source=source,
             category=category,
-            name=_DEFAULT_RULE_NAME,
-            include_keywords_json=_encode_json(_DEFAULT_INCLUDE_KEYWORDS),
+            name=spec.rule_name,
+            include_keywords_json=_encode_json(list(spec.include_keywords)),
             exclude_keywords_json=_encode_json(_DEFAULT_EXCLUDE_KEYWORDS),
-            history_years=5,
+            history_years=spec.history_years,
             discovery_config_json=_encode_json(_DEFAULT_DISCOVERY),
             is_active=True,
         )
@@ -173,7 +241,7 @@ def _validate_raw_values(raw_entries: list[Any], entries: list[SeedUrlImport]) -
             raise ValueError("manifest values must already be canonical")
 
 
-def _validate_entries(entries: list[SeedUrlImport]) -> None:
+def _validate_entries(entries: list[SeedUrlImport], spec: ScenarioSpec) -> None:
     if not entries:
         raise ValueError("empty manifest")
 
@@ -188,10 +256,10 @@ def _validate_entries(entries: list[SeedUrlImport]) -> None:
         canonical_urls.add(canonical)
 
         if (
-            not entry.expected_title.startswith(_REQUIRED_TITLE_PREFIX)
-            or entry.expected_title.endswith("-新华网")
+            not any(token in entry.expected_title for token in spec.title_must_contain)
+            or any(entry.expected_title.endswith(suffix) for suffix in spec.title_must_not_end_with)
             or entry.is_verified is not True
-            or not _EARLIEST_DATE <= entry.expected_published_date <= _LATEST_DATE
+            or not spec.earliest_date <= entry.expected_published_date <= spec.latest_date
             or _url_date(canonical) != entry.expected_published_date
         ):
             raise ValueError("invalid manifest entry")

@@ -180,3 +180,21 @@ python scripts/reclean_policy_content.py                         # 扁平清洗�
 python scripts/reclean_policy_content.py --refetch --dry-run     # 预览重抓分段将变更的行
 python scripts/reclean_policy_content.py --refetch               # 重抓 HTML 还原段落并写库
 ```
+
+### 默认采集场景与种子清单
+
+系统首次启动会按 `DEFAULT_SCENARIOS` 自动初始化下列采集场景（每个场景绑定一个政策类别、一条采集规则与一份已核验种子清单；新增场景只需新增 `ScenarioSpec` 与对应 JSON 资源）：
+
+| 场景 | 政策类别 | 采集规则名 | 回填窗口 | 种子清单 |
+| --- | --- | --- | --- | --- |
+| `politburo` | 中央政治局会议 | 中央政治局会议 | 5 年 | `collectors/resources/xinhua_politburo_seed_urls.json` |
+| `finance_council` | 中央财经委员会会议 | 中央财经委员会会议 | 9 年 | `collectors/resources/xinhua_finance_council_seed_urls.json` |
+
+种子清单的离线校验：
+
+```bash
+python scripts/validate_seed_manifest.py
+# 预期：所有场景的清单均有效时输出
+#   seed manifest valid: 0 invalid, 0 duplicate
+# 并以状态码 0 退出；任一场景无效则输出对应场景的错误并以状态码 1 退出。
+```

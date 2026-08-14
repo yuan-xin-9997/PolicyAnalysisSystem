@@ -204,7 +204,9 @@ def _fetch_payload() -> dict[str, object]:
 
 
 def _article_payload() -> dict[str, object]:
+    title = "中共中央政治局召开会议"
     content = (
+        f"{title} 2026年7月30日 14:00:00 来源：新华网 "
         "新华社北京7月30日电 中共中央政治局7月30日召开会议，分析研究当前经济形势，"
         "部署下半年经济工作。会议强调，要坚持稳中求进工作总基调，完整、准确、全面贯彻"
         "新发展理念，加大宏观政策调控力度，扎实推动高质量发展，切实保障和改善民生。"
@@ -215,7 +217,7 @@ def _article_payload() -> dict[str, object]:
         "adapter_version": "1",
         "artifact_id": "artifact-policy-1",
         "data": {
-            "title": "中共中央政治局召开会议",
+            "title": title,
             "content": content,
             "author": "新华社",
             "date": "2026-07-30T14:00:00+08:00",

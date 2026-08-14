@@ -204,7 +204,7 @@ class XinhuaCollector:
             marker in normalized_content for marker in _VIDEO_MARKERS
         ):
             reason = "VIDEO_ONLY"
-        elif "中共中央政治局" not in lead or "召开会议" not in lead:
+        elif not any(keyword in lead for keyword in self.include_keywords):
             reason = "LEAD_NOT_MATCHED"
         elif not _is_official_source(article.author, normalized_content):
             reason = "SOURCE_NOT_OFFICIAL"

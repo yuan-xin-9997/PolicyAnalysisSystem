@@ -1,0 +1,32 @@
+[
+  {
+    "url": "https://www.news.cn/politics/leaders/2022-04/26/c_1128599047.htm",
+    "expected_title": "习近平主持召开中央财经委员会第十一次会议",
+    "expected_published_date": "2022-04-26",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.news.cn/politics/leaders/2023-05/05/c_1129592754.htm",
+    "expected_title": "习近平主持召开二十届中央财经委员会第一次会议强调 加快建设以实体经济为支撑的现代化产业体系 以人口高质量发展支撑中国式现代化",
+    "expected_published_date": "2023-05-05",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.news.cn/politics/leaders/2023-07/20/c_1129760215.htm",
+    "expected_title": "习近平主持召开中央财经委员会第二次会议强调 切实加强耕地保护 全力提升耕地质量 稳步拓展农业生产空间",
+    "expected_published_date": "2023-07-20",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.news.cn/politics/leaders/20240223/3ddb1ef015b844fe93108cd3c46df62b/c.html",
+    "expected_title": "习近平主持召开中央财经委员会第四次会议强调 推动新一轮大规模设备更新和消费品以旧换新 有效降低全社会物流成本",
+    "expected_published_date": "2024-02-23",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.news.cn/politics/leaders/20250701/fa21800cba78431a9276c06f04d6a75b/c.html",
+    "expected_title": "习近平主持召开中央财经委员会第六次会议",
+    "expected_published_date": "2025-07-01",
+    "is_verified": true
+  }
+]

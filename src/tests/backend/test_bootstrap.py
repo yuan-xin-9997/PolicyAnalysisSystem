@@ -211,7 +211,7 @@ def test_default_first_startup_migrates_to_head_and_supports_long_chinese_search
     assert os.environ["POLICY_ANALYSIS_DATABASE__PATH"] == str(unrelated_database)
 
 
-def test_default_startup_bootstraps_xinhua_politburo_rule_and_seed_urls(
+def test_default_startup_bootstraps_both_default_scenarios(
     tmp_path: Path,
 ) -> None:
     config_path, _database_path = _write_default_runtime_files(tmp_path)
@@ -229,28 +229,47 @@ def test_default_startup_bootstraps_xinhua_politburo_rule_and_seed_urls(
         assert login.status_code == 200
         response = client.get("/api/v1/collection-rules")
         assert response.status_code == 200
-        assert [item["name"] for item in response.json()] == ["中央政治局会议"]
+        assert sorted(item["name"] for item in response.json()) == [
+            "中央政治局会议",
+            "中央财经委员会会议",
+        ]
 
         with app.state.database_sessions() as database:
-            category = database.scalar(
+            politburo_category = database.scalar(
                 select(PolicyCategory).where(PolicyCategory.code == "politburo_meeting")
             )
+            finance_category = database.scalar(
+                select(PolicyCategory).where(PolicyCategory.code == "finance_council_meeting")
+            )
             source = database.scalar(select(Source).where(Source.code == "xinhua"))
-            rule = database.scalar(select(CollectionRule).where(CollectionRule.name == "中央政治局会议"))
-            assert category is not None
-            assert category.name == "中央政治局会议"
+            politburo_rule = database.scalar(
+                select(CollectionRule).where(CollectionRule.name == "中央政治局会议")
+            )
+            finance_rule = database.scalar(
+                select(CollectionRule).where(CollectionRule.name == "中央财经委员会会议")
+            )
+            assert politburo_category is not None
+            assert finance_category is not None
             assert source is not None
             assert source.name == "新华网"
-            assert rule is not None
-            assert rule.history_years == 5
-            assert json.loads(rule.include_keywords_json) == ["中共中央政治局召开会议"]
+            assert politburo_rule is not None
+            assert politburo_rule.history_years == 5
+            assert json.loads(politburo_rule.include_keywords_json) == ["中共中央政治局召开会议"]
+            assert finance_rule is not None
+            assert finance_rule.history_years == 9
+            assert json.loads(finance_rule.include_keywords_json) == ["中央财经委员会"]
             assert database.scalar(
-                select(func.count()).select_from(SeedUrl).where(SeedUrl.rule_id == rule.id)
+                select(func.count()).select_from(SeedUrl).where(SeedUrl.rule_id == politburo_rule.id)
             ) == len(load_seed_manifest())
+            assert (
+                database.scalar(
+                    select(func.count()).select_from(SeedUrl).where(SeedUrl.rule_id == finance_rule.id)
+                )
+                > 0
+            )
 
     with _test_client(app), app.state.database_sessions() as database:
-        assert database.scalar(select(func.count()).select_from(CollectionRule)) == 1
-        assert database.scalar(select(func.count()).select_from(SeedUrl)) == len(load_seed_manifest())
+        assert database.scalar(select(func.count()).select_from(CollectionRule)) == 2
 
 
 def test_runtime_migration_serializes_concurrent_upgrades_of_same_database(tmp_path: Path) -> None:

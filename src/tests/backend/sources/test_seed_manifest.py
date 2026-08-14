@@ -349,3 +349,17 @@ def test_validator_script_runs_offline_from_an_unrelated_working_directory(tmp_p
     assert completed.returncode == 0
     assert completed.stdout == "seed manifest valid: 0 invalid, 0 duplicate\n"
     assert completed.stderr == ""
+
+
+def test_load_seed_manifest_supports_finance_council_scenario() -> None:
+    from policy_analysis.sources.bootstrap import FINANCE_COUNCIL_SPEC, load_seed_manifest
+
+    entries = load_seed_manifest(spec=FINANCE_COUNCIL_SPEC)
+
+    assert entries
+    assert all("中央财经委员会" in entry.expected_title for entry in entries)
+    assert all(entry.is_verified for entry in entries)
+    dates = [entry.expected_published_date for entry in entries]
+    assert dates == sorted(dates)
+    assert min(dates) >= date(2018, 4, 1)
+    assert max(dates) <= date(2026, 8, 1)
