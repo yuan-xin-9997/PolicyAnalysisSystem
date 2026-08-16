@@ -190,6 +190,8 @@ python scripts/reclean_policy_content.py --refetch               # 重抓 HTML �
 | `politburo` | 中央政治局会议 | 中央政治局会议 | 5 年 | `collectors/resources/xinhua_politburo_seed_urls.json` |
 | `finance_council` | 中央财经委员会会议 | 中央财经委员会会议 | 9 年 | `collectors/resources/xinhua_finance_council_seed_urls.json` |
 
+中央财经委员会种子清单现收录 14 条已核验通稿 URL（2018-04-02 第一次至 2025-07-01 二十届第六次，覆盖新华网 `xinhuanet.com` 与 `news.cn` 两种域名形态）。未收录的 3 次会议（十九届第七次 2020-04-10、二十届第三/五次）经多渠道核实当时未公开发布通稿（新华社、人民日报、央视新闻联播均无报道），按"无法核实的不入清单"原则跳过，后续如公开发布可由 RSS 发现机制自动补采。
+
 种子清单的离线校验：
 
 ```bash
@@ -198,3 +200,32 @@ python scripts/validate_seed_manifest.py
 #   seed manifest valid: 0 invalid, 0 duplicate
 # 并以状态码 0 退出；任一场景无效则输出对应场景的错误并以状态码 1 退出。
 ```
+
+### 来源白名单与跨源同一会议去重
+
+采集场景的 `Source.allowed_domains`（首次启动由 `bootstrap.py` 写入）默认接受以下域名集合：
+
+| 域名 | 用途 |
+| --- | --- |
+| `news.cn`、`xinhuanet.com` | 新华网及子域（中央政治局会议与中央财经委员会会议的主源） |
+| `people.com.cn` | 人民日报（politics.people.com.cn / finance.people.com.cn 等子域） |
+| `cctv.com` | 央视新闻（news.cctv.com / jingji.cctv.com / tv.cctv.com 等子域） |
+
+种子清单 URL 校验（`bootstrap.py:_host_allowed`）对以上基域名做后缀匹配：主机名等于基域名或以 `.基域名` 结尾均接受（覆盖 `www.` / 频道子域），形如 `news.cn.evil.example`、`notpeople.com.cn` 的伪装域名会被拒绝。`m.people.cn`（注意是 `.cn` 而非 `.com.cn`）不在白名单内。
+
+当同一场会议（例如「中央财经委员会第十次会议」）被多个来源同步发稿或转载时，跨源去重在 `PolicyService._upsert` 中通过 `(category_id, title, published_date_in_beijing)` 三元组判定为同一会议，运行时只会在 `policies` 表落一条记录。源优先级（`policies/service.py:_source_priority`）按"权威度"从高到低硬编码：
+
+| 来源 | 优先级 |
+| --- | --- |
+| `news.cn` / `xinhuanet.com` | 3 |
+| `people.com.cn` | 2 |
+| `cctv.com` | 1 |
+| 其他 | 0 |
+
+升级语义：
+
+- 新源优先级 **高于** 已存源时，把已存 policy 整体升级为新源（`source_id` / `canonical_url` / `publisher` / `content_text` / `content_hash` / `webfetch_artifact_id` / `last_crawled_at` 全部覆盖，旧 `content_text` 写入 `PolicyRevision`），返回 `outcome="updated"`；
+- 新源优先级 **不高于** 已存源时，只标 `outcome="duplicate"`，已存 policy 不动；
+- 同源 + 相同 `(source_id, canonical_url)` 或 `(source_id, content_hash)` 时仍走原有的 source-scoped dedup，不受跨源检查影响。
+
+标题匹配为严格相等（不做"（受权发布）"等公共前后缀归一化），`published_at` 统一以 `Asia/Shanghai` 时区对齐到日期。配套索引 `ix_policies_category_title_published` 由迁移 `0005` 创建，仅服务跨源 dedup 检索，不替代原有的 `uq_policies_source_canonical_url` 与 `ix_policies_source_content_hash`。

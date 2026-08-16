@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import RLock
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -28,6 +30,21 @@ from policy_analysis.sources.models import PolicyCategory, Source
 # The supported deployment is one FastAPI process. This lock makes the
 # select-then-insert content deduplication safe across its worker threads.
 _WRITE_LOCK = RLock()
+
+# Beijing time is the canonical "news day" for the policy meeting key: a
+# meeting announced at 23:00 Beijing on 2022-04-26 must hash to the same
+# date even if its UTC timestamp crosses midnight. Using the Beijing date
+# keeps the meeting identity stable across collectors and DB storage.
+_BEIJING = ZoneInfo("Asia/Shanghai")
+
+# Source priority for cross-source meeting dedup. A higher number wins when
+# the meeting_key lookup finds an existing policy: the new (higher-priority)
+# source's content replaces the old one, the old content is preserved as a
+# PolicyRevision, and the outcome is "updated". A lower or equal priority
+# just records "duplicate" and leaves the existing policy alone.
+_XINHUA_DOMAINS = frozenset({"news.cn", "xinhuanet.com"})
+_PEOPLE_CN_DOMAIN = "people.com.cn"
+_CCTV_DOMAIN = "cctv.com"
 
 
 class PolicyWriteError(RuntimeError):
@@ -96,6 +113,26 @@ class PolicyService:
         if not repository.references_exist(record.source_id, record.category_id, task_item_id):
             raise _reference_error()
         canonical_url = str(record.canonical_url)
+
+        # 1) Cross-source meeting-key dedup. Two sources reporting the same
+        # meeting carry the same (category, title, Beijing date) even when
+        # their bodies differ in page chrome, so a global lookup on this
+        # triple is the primary cross-source dedup path.
+        existing_source = session.get(Source, record.source_id)
+        beijing_date = record.published_at.astimezone(_BEIJING).date()
+        existing_meeting = repository.get_by_meeting_key(record.category_id, record.title, beijing_date)
+        if (
+            existing_meeting is not None
+            and existing_source is not None
+            and existing_meeting.source_id != record.source_id
+        ):
+            existing_priority = _source_priority_for_source(session, existing_meeting.source_id)
+            new_priority = _source_priority(existing_source)
+            if new_priority > existing_priority:
+                return self._upgrade_meeting(session, repository, existing_meeting, record, task_item_id)
+            return PolicyUpsertResult(policy_id=existing_meeting.id, outcome="duplicate")
+
+        # 2) Source-scoped dedup (existing behaviour).
         policy = repository.get_by_source_url(record.source_id, canonical_url)
         if policy is None:
             policy = repository.get_by_source_hash(record.source_id, record.content_hash)
@@ -135,6 +172,40 @@ class PolicyService:
         )
         policy.category_id = record.category_id
         policy.title = record.title
+        policy.publisher = record.publisher
+        policy.published_at = record.published_at
+        policy.content_text = record.content_text
+        policy.content_hash = record.content_hash
+        policy.webfetch_artifact_id = record.webfetch_artifact_id
+        policy.last_crawled_at = max(policy.last_crawled_at, record.crawled_at)
+        policy.updated_at = self._aware_now()
+        session.flush()
+        return PolicyUpsertResult(policy_id=policy.id, outcome="updated")
+
+    def _upgrade_meeting(
+        self,
+        session: Session,
+        repository: PolicyRepository,
+        policy: Policy,
+        record: PolicyWrite,
+        task_item_id: int,
+    ) -> PolicyUpsertResult:
+        """Replace a lower-priority source's content with a higher-priority one."""
+
+        repository.add_revision(
+            PolicyRevision(
+                policy_id=policy.id,
+                content_text=policy.content_text,
+                content_hash=policy.content_hash,
+                webfetch_artifact_id=policy.webfetch_artifact_id,
+                replaced_at=self._aware_now(),
+                task_item_id=task_item_id,
+            )
+        )
+        policy.source_id = record.source_id
+        policy.category_id = record.category_id
+        policy.title = record.title
+        policy.canonical_url = str(record.canonical_url)
         policy.publisher = record.publisher
         policy.published_at = record.published_at
         policy.content_text = record.content_text
@@ -228,3 +299,35 @@ def _validated_upsert_input(record: PolicyWrite, task_item_id: int) -> PolicyWri
     if isinstance(task_item_id, bool) or not isinstance(task_item_id, int) or task_item_id < 1:
         raise ValueError("task_item_id must be a positive integer")
     return _revalidate_record(record)
+
+
+def _source_priority(source: Source) -> int:
+    """Return a higher number for the more authoritative source.
+
+    Used to decide which source wins when the same meeting is reported by
+    multiple sources. Xinhua wire (news.cn / xinhuanet.com) wins, then
+    People's Daily (people.com.cn), then CCTV (cctv.com). Unknown sources
+    are lowest priority so they never overwrite a known source.
+    """
+    domains = _allowed_domains(source)
+    if domains & _XINHUA_DOMAINS:
+        return 3
+    if _PEOPLE_CN_DOMAIN in domains:
+        return 2
+    if _CCTV_DOMAIN in domains:
+        return 1
+    return 0
+
+
+def _source_priority_for_source(session: Session, source_id: int) -> int:
+    source = session.get(Source, source_id)
+    if source is None:
+        return 0
+    return _source_priority(source)
+
+
+def _allowed_domains(source: Source) -> set[str]:
+    try:
+        return set(json.loads(source.allowed_domains_json))
+    except (TypeError, ValueError):
+        return set()

@@ -1,5 +1,59 @@
 [
   {
+    "url": "https://www.xinhuanet.com/politics/leaders/2018-04/02/c_1122627816.htm",
+    "expected_title": "习近平主持召开中央财经委员会第一次会议强调 加强党中央对经济工作的集中统一领导 打好决胜全面建成小康社会三大攻坚战",
+    "expected_published_date": "2018-04-02",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2018-07/13/c_1123123961.htm",
+    "expected_title": "习近平主持召开中央财经委员会第二次会议强调 提高关键核心技术创新能力 为我国发展提供有力科技保障",
+    "expected_published_date": "2018-07-13",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2018-10/10/c_1123541018.htm",
+    "expected_title": "习近平主持召开中央财经委员会第三次会议",
+    "expected_published_date": "2018-10-10",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2019-04/22/c_1124400206.htm",
+    "expected_title": "习近平主持召开中央财经委员会第四次会议",
+    "expected_published_date": "2019-04-22",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2019-08/26/c_1124923884.htm",
+    "expected_title": "习近平主持召开中央财经委员会第五次会议",
+    "expected_published_date": "2019-08-26",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2020-01/03/c_1125420604.htm",
+    "expected_title": "习近平主持召开中央财经委员会第六次会议",
+    "expected_published_date": "2020-01-03",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2020-09/09/c_1126473726.htm",
+    "expected_title": "习近平主持召开中央财经委员会第八次会议强调 统筹推进现代流通体系建设 为构建新发展格局提供有力支撑 李克强王沪宁韩正出席",
+    "expected_published_date": "2020-09-09",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/politics/leaders/2021-03/15/c_1127214607.htm",
+    "expected_title": "习近平主持召开中央财经委员会第九次会议强调 推动平台经济规范健康持续发展 把碳达峰碳中和纳入生态文明建设整体布局",
+    "expected_published_date": "2021-03-15",
+    "is_verified": true
+  },
+  {
+    "url": "https://www.xinhuanet.com/2021-08/17/c_1127770343.htm",
+    "expected_title": "习近平主持召开中央财经委员会第十次会议强调 在高质量发展中促进共同富裕 统筹做好重大金融风险防范化解工作 李克强汪洋王沪宁韩正出席",
+    "expected_published_date": "2021-08-17",
+    "is_verified": true
+  },
+  {
     "url": "https://www.news.cn/politics/leaders/2022-04/26/c_1128599047.htm",
     "expected_title": "习近平主持召开中央财经委员会第十一次会议",
     "expected_published_date": "2022-04-26",

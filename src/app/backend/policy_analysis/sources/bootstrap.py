@@ -29,10 +29,28 @@ from policy_analysis.sources.url_validation import normalized_http_hostname
 
 _RESOURCE_PACKAGE = "policy_analysis.collectors.resources"
 
-_ALLOWED_HOSTS = frozenset({"news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"})
+# Base registrable domains whose subdomains all belong to the same publisher:
+# e.g. politics.people.com.cn / cpc.people.com.cn / m.people.com.cn are all
+# People's Daily, news.cctv.com / tv.cctv.com are all CCTV. A host is allowed
+# when it equals one of these domains or is a direct/deeper subdomain of it.
+_ALLOWED_BASE_DOMAINS = frozenset(
+    {
+        "news.cn",
+        "xinhuanet.com",
+        "people.com.cn",
+        "cctv.com",
+    }
+)
+
+
+def _host_allowed(host: str) -> bool:
+    return any(host == base or host.endswith(f".{base}") for base in _ALLOWED_BASE_DOMAINS)
+
 
 _OLD_URL_DATE = re.compile(r"/(20\d{2})-(\d{2})/(\d{2})(?:/|$)")
 _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
+_PEOPLE_CN_URL_DATE = re.compile(r"/n1/(20\d{2})/(\d{2})(\d{2})(?:/|$)")
+_CCTV_URL_DATE = re.compile(r"/(20\d{2})/(\d{2})/(\d{2})/(?:ART|VIDE)")
 
 _MANIFEST_ADAPTER = TypeAdapter(list[SeedUrlImport])
 
@@ -41,7 +59,14 @@ _DEFAULT_SOURCE_NAME = "新华网"
 _DEFAULT_SOURCE_ORGANIZATION = "新华社"
 _DEFAULT_SOURCE_BASE_URL = "https://news.cn/"
 _DEFAULT_SOURCE_ADAPTER = "xinhua"
-_DEFAULT_ALLOWED_DOMAINS = ["news.cn", "www.news.cn", "xinhuanet.com", "www.xinhuanet.com"]
+_DEFAULT_ALLOWED_DOMAINS = [
+    "news.cn",
+    "www.news.cn",
+    "xinhuanet.com",
+    "www.xinhuanet.com",
+    "people.com.cn",
+    "cctv.com",
+]
 _DEFAULT_EXCLUDE_KEYWORDS = ["视频"]
 _DEFAULT_DISCOVERY = {
     "rss_urls": ["https://www.news.cn/rss/politics.xml"],
@@ -274,7 +299,7 @@ def _validate_url(url: str) -> str:
     host = normalized_http_hostname(url)
     if (
         parsed.scheme != "https"
-        or host not in _ALLOWED_HOSTS
+        or not _host_allowed(host)
         or parsed.port is not None
         or parsed.query
         or parsed.fragment
@@ -287,7 +312,12 @@ def _validate_url(url: str) -> str:
 
 
 def _url_date(url: str) -> date:
-    for pattern in (_OLD_URL_DATE, _CURRENT_URL_DATE):
+    for pattern in (
+        _OLD_URL_DATE,
+        _CURRENT_URL_DATE,
+        _PEOPLE_CN_URL_DATE,
+        _CCTV_URL_DATE,
+    ):
         match = pattern.search(url)
         if match is not None:
             try:

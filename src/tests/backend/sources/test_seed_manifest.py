@@ -118,7 +118,7 @@ def test_default_manifest_is_packaged_and_fulfils_every_semantic_constraint(
         pytest.param([manifest_entry(is_verified=1)], id="boolean-wrong-type"),
         pytest.param([manifest_entry(is_verified=False)], id="unverified"),
         pytest.param(
-            [manifest_entry(url="https://politics.news.cn/20240131/item/c.html")],
+            [manifest_entry(url="https://news.cn.evil.example/20240131/item/c.html")],
             id="nonofficial-subdomain",
         ),
         pytest.param(
@@ -363,3 +363,59 @@ def test_load_seed_manifest_supports_finance_council_scenario() -> None:
     assert dates == sorted(dates)
     assert min(dates) >= date(2018, 4, 1)
     assert max(dates) <= date(2026, 8, 1)
+
+
+def test_host_allowlist_accepts_publisher_subdomains_and_rejects_others() -> None:
+    from policy_analysis.sources.bootstrap import _host_allowed
+
+    # 新华网 / 人民网 / 央视网 的基域名与任意子域均允许
+    for host in (
+        "news.cn",
+        "www.news.cn",
+        "xinhuanet.com",
+        "people.com.cn",
+        "politics.people.com.cn",
+        "cpc.people.com.cn",
+        "cctv.com",
+        "news.cctv.com",
+        "tv.cctv.com",
+    ):
+        assert _host_allowed(host), host
+    # 相似但不同的域名必须被拒绝，防止后缀绕过（如 notpeople.com.cn）
+    for host in ("notpeople.com.cn", "cctv.com.evil.example", "example.com", "gov.cn"):
+        assert not _host_allowed(host), host
+
+
+def test_validate_url_accepts_publisher_subdomain_manifest_urls() -> None:
+    from policy_analysis.sources.bootstrap import _validate_url
+
+    assert (
+        _validate_url("https://politics.people.com.cn/n1/2024/0223/c1024-40182417.html")
+        == "https://politics.people.com.cn/n1/2024/0223/c1024-40182417.html"
+    )
+    assert (
+        _validate_url("https://news.cctv.com/2023/05/05/ARTIP2KyEn19t3awdpO94JNT230505.shtml")
+        == "https://news.cctv.com/2023/05/05/ARTIP2KyEn19t3awdpO94JNT230505.shtml"
+    )
+    with pytest.raises(ValueError, match="invalid manifest URL"):
+        _validate_url("https://m.people.cn/n4/2021/0817/c190-15149190.html")
+
+
+def test_url_date_parser_recognises_people_cn_and_cctv_com_formats() -> None:
+    from policy_analysis.sources.bootstrap import _url_date
+
+    assert _url_date("https://politics.people.com.cn/n1/2021/0817/c1234-56789.html") == date(2021, 8, 17)
+    assert _url_date("https://www.people.com.cn/n1/2018/0713/c1-2.html") == date(2018, 7, 13)
+    assert _url_date("https://news.cctv.com/2021/08/17/ART12345678.shtml") == date(2021, 8, 17)
+    assert _url_date("https://tv.cctv.com/2021/08/17/VIDE8VwZutVkg10dx4mYn9P4180713.shtml") == date(
+        2021, 8, 17
+    )
+
+
+def test_bootstrap_default_source_allowed_domains_covers_news_people_cctv() -> None:
+    from policy_analysis.sources.bootstrap import _DEFAULT_ALLOWED_DOMAINS
+
+    assert "news.cn" in _DEFAULT_ALLOWED_DOMAINS
+    assert "xinhuanet.com" in _DEFAULT_ALLOWED_DOMAINS
+    assert "people.com.cn" in _DEFAULT_ALLOWED_DOMAINS
+    assert "cctv.com" in _DEFAULT_ALLOWED_DOMAINS

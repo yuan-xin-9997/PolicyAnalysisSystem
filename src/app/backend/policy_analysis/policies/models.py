@@ -22,6 +22,14 @@ class Policy(Base):
         Index("ix_policies_last_crawled_at", "last_crawled_at"),
         Index("ix_policies_publisher", "publisher"),
         Index("ix_policies_category_id", "category_id"),
+        # Cross-source meeting-key dedup: same (category_id, title, published_at)
+        # is the same meeting regardless of which source reported it.
+        Index(
+            "ix_policies_category_title_published",
+            "category_id",
+            "title",
+            "published_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

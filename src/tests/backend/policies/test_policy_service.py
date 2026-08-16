@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -612,7 +612,7 @@ def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(
     sessions = session_factory(engine)
     try:
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
             sql = connection.execute(
                 text("SELECT sql FROM sqlite_master WHERE name = 'policies_fts'")
             ).scalar_one()
@@ -676,7 +676,7 @@ def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(
     upgraded = build_engine(database_path)
     try:
         with upgraded.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
             assert (
                 connection.execute(
                     text("SELECT count(*) FROM policies_fts WHERE policies_fts MATCH :query"),
@@ -686,3 +686,284 @@ def test_policy_fts_migration_round_trips_and_rebuilds_existing_content(
             )
     finally:
         upgraded.dispose()
+
+
+def _add_source(
+    sessions: sessionmaker[Session],
+    code: str,
+    name: str,
+    organization: str,
+    base_url: str,
+    allowed_domains: list[str],
+) -> int:
+    with sessions.begin() as database:
+        source = Source(
+            code=code,
+            name=name,
+            organization=organization,
+            base_url=base_url,
+            adapter_type=code,
+            allowed_domains_json=__import__("json").dumps(allowed_domains),
+            is_active=True,
+        )
+        database.add(source)
+        database.flush()
+        return source.id
+
+
+def _build_meeting_catalog(
+    sessions: sessionmaker[Session],
+    xinhua_id: int,
+) -> tuple[int, Callable[[str, str], int]]:
+    """Create a meeting category, a rule, and a task-item factory.
+
+    Returns ``(meeting_id, add_item)`` where ``add_item(candidate_url, url_for_rule)``
+    returns a fresh ``CrawlTaskItem.id`` linked to the rule.
+    """
+
+    with sessions.begin() as database:
+        meeting = PolicyCategory(
+            code="finance_council",
+            name="中央财经委员会会议",
+            is_active=True,
+        )
+        database.add(meeting)
+        database.flush()
+        rule = CollectionRule(
+            source_id=xinhua_id,
+            category_id=meeting.id,
+            name="中央财经委员会会议",
+            include_keywords_json='["中央财经委员会"]',
+            exclude_keywords_json="[]",
+            history_years=9,
+            discovery_config_json='{"rss_urls":["https://www.news.cn/rss/politics.xml"]}',
+            is_active=True,
+        )
+        database.add(rule)
+        database.flush()
+        meeting_id = meeting.id
+        rule_id = rule.id
+
+    def add_item(candidate_url: str, _url: str) -> int:
+        with sessions.begin() as database:
+            task = CrawlTask(
+                rule_id=rule_id,
+                trigger_type="manual",
+                status="running",
+                request_snapshot_json="{}",
+            )
+            database.add(task)
+            database.flush()
+            item = CrawlTaskItem(
+                task_id=task.id,
+                candidate_url=candidate_url,
+                status="stored",
+            )
+            database.add(item)
+            database.flush()
+            return item.id
+
+    return meeting_id, add_item
+
+
+def test_cross_source_lower_priority_hits_existing_meeting_returns_duplicate(
+    migrated_database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    """A people.cn article about a meeting already in news.cn is a duplicate."""
+
+    _engine, sessions, _database_path = migrated_database
+    xinhua_id = _add_source(sessions, "xinhua", "新华网", "新华社", "https://www.news.cn/", ["news.cn"])
+    people_id = _add_source(
+        sessions,
+        "people_daily",
+        "人民日报",
+        "人民日报社",
+        "https://politics.people.com.cn/",
+        ["people.com.cn"],
+    )
+    meeting_id, add_item = _build_meeting_catalog(sessions, xinhua_id)
+
+    item_xinhua = add_item(
+        "https://www.news.cn/politics/20210817/c_1.html",
+        "https://www.news.cn/politics/leaders/2021-08/17/c_1.htm",
+    )
+    item_people = add_item(
+        "https://politics.people.com.cn/n1/2021/0817/c2-3.html",
+        "https://politics.people.com.cn/n1/2021/0817/c2-3.html",
+    )
+
+    title = "中央财经委员会第十次会议"
+    published = datetime(2021, 8, 17, 10, tzinfo=SHANGHAI)
+    xinhua_record = article_record(
+        xinhua_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://www.news.cn/politics/leaders/2021-08/17/c_1.htm",
+        published_at=published,
+        content_text="新华社通稿正文。",
+    )
+    people_record = article_record(
+        people_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://politics.people.com.cn/n1/2021/0817/c2-3.html",
+        publisher="人民日报",
+        published_at=published,
+        content_text="人民日报转载正文。",
+    )
+
+    service = PolicyService(sessions)
+    first = service.upsert(xinhua_record, task_item_id=item_xinhua)
+    second = service.upsert(people_record, task_item_id=item_people)
+
+    assert first.outcome == "stored"
+    assert second.outcome == "duplicate"
+    assert first.policy_id == second.policy_id
+
+    with sessions() as database:
+        rows = list(database.scalars(select(Policy).where(Policy.category_id == meeting_id)))
+        assert len(rows) == 1
+        assert rows[0].source_id == xinhua_id
+        revisions = list(
+            database.scalars(select(PolicyRevision).where(PolicyRevision.policy_id == rows[0].id))
+        )
+        assert revisions == []
+
+
+def test_cross_source_higher_priority_upgrades_existing_meeting(
+    migrated_database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    """An xinhua article about a meeting already in people.cn replaces it."""
+
+    _engine, sessions, _database_path = migrated_database
+    xinhua_id = _add_source(sessions, "xinhua", "新华网", "新华社", "https://www.news.cn/", ["news.cn"])
+    people_id = _add_source(
+        sessions,
+        "people_daily",
+        "人民日报",
+        "人民日报社",
+        "https://politics.people.com.cn/",
+        ["people.com.cn"],
+    )
+    meeting_id, add_item = _build_meeting_catalog(sessions, xinhua_id)
+
+    item_people = add_item(
+        "https://politics.people.com.cn/n1/2021/0817/c4-5.html",
+        "https://politics.people.com.cn/n1/2021/0817/c4-5.html",
+    )
+    item_xinhua = add_item(
+        "https://www.news.cn/politics/20210817/c_6.html",
+        "https://www.news.cn/politics/leaders/2021-08/17/c_6.htm",
+    )
+
+    title = "中央财经委员会第十次会议"
+    published = datetime(2021, 8, 17, 10, tzinfo=SHANGHAI)
+    people_record = article_record(
+        people_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://politics.people.com.cn/n1/2021/0817/c4-5.html",
+        publisher="人民日报",
+        published_at=published,
+        content_text="人民日报转载正文。",
+    )
+    xinhua_record = article_record(
+        xinhua_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://www.news.cn/politics/leaders/2021-08/17/c_6.htm",
+        published_at=published,
+        content_text="新华社通稿正文。",
+    )
+
+    service = PolicyService(sessions)
+    first = service.upsert(people_record, task_item_id=item_people)
+    second = service.upsert(xinhua_record, task_item_id=item_xinhua)
+
+    assert first.outcome == "stored"
+    assert second.outcome == "updated"
+    assert first.policy_id == second.policy_id
+
+    with sessions() as database:
+        rows = list(database.scalars(select(Policy).where(Policy.category_id == meeting_id)))
+        assert len(rows) == 1
+        upgraded = rows[0]
+        assert upgraded.source_id == xinhua_id
+        assert upgraded.canonical_url.endswith("/c_6.htm")
+        assert upgraded.content_text == "新华社通稿正文。"
+        revisions = list(
+            database.scalars(select(PolicyRevision).where(PolicyRevision.policy_id == upgraded.id))
+        )
+        assert len(revisions) == 1
+        assert revisions[0].content_text == "人民日报转载正文。"
+
+
+def test_same_source_meeting_key_falls_through_to_source_scoped_dedup(
+    migrated_database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    """Same source + same meeting key must not short-circuit as duplicate.
+
+    A different article (different URL, different content) from the same
+    source about the same meeting is a *separate* Xinhua dispatch — both
+    are valid independent records, so the cross-source meeting-key check
+    must not collapse them. The source-scoped dedup only fires on
+    ``(source_id, canonical_url)`` or ``(source_id, content_hash)`` matches.
+    """
+
+    _engine, sessions, _database_path = migrated_database
+    xinhua_id = _add_source(sessions, "xinhua", "新华网", "新华社", "https://www.news.cn/", ["news.cn"])
+    meeting_id, add_item = _build_meeting_catalog(sessions, xinhua_id)
+
+    item1 = add_item(
+        "https://www.news.cn/politics/20210817/a.html",
+        "https://www.news.cn/politics/leaders/2021-08/17/a.htm",
+    )
+    item2 = add_item(
+        "https://www.news.cn/politics/20210817/b.html",
+        "https://www.news.cn/politics/leaders/2021-08/17/b.htm",
+    )
+
+    title = "中央财经委员会第十次会议"
+    published = datetime(2021, 8, 17, 10, tzinfo=SHANGHAI)
+    first_record = article_record(
+        xinhua_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://www.news.cn/politics/leaders/2021-08/17/a.htm",
+        published_at=published,
+        content_text="第一版正文。",
+    )
+    second_record = article_record(
+        xinhua_id,
+        meeting_id,
+        title=title,
+        canonical_url="https://www.news.cn/politics/leaders/2021-08/17/b.htm",
+        published_at=published,
+        content_text="第二版正文。",
+    )
+
+    service = PolicyService(sessions)
+    first = service.upsert(first_record, task_item_id=item1)
+    second = service.upsert(second_record, task_item_id=item2)
+
+    assert first.outcome == "stored"
+    assert second.outcome == "stored"
+    assert first.policy_id != second.policy_id
+
+    with sessions() as database:
+        rows = list(database.scalars(select(Policy).where(Policy.category_id == meeting_id)))
+        assert len(rows) == 2
+
+
+def test_source_priority_orders_xinhua_above_people_cn_above_cctv() -> None:
+    from policy_analysis.policies.service import _source_priority
+
+    class _Stub:
+        def __init__(self, domains: list[str]) -> None:
+            self.allowed_domains_json = __import__("json").dumps(domains)
+
+    assert _source_priority(_Stub(["news.cn"])) == 3
+    assert _source_priority(_Stub(["xinhuanet.com"])) == 3
+    assert _source_priority(_Stub(["people.com.cn"])) == 2
+    assert _source_priority(_Stub(["cctv.com"])) == 1
+    assert _source_priority(_Stub([])) == 0

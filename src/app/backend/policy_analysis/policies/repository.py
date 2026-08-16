@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as _date
 
 from sqlalchemy import column, func, select, table, text
 from sqlalchemy.orm import Session
@@ -39,6 +40,32 @@ class PolicyRepository:
             .where(
                 Policy.source_id == source_id,
                 Policy.content_hash == content_hash,
+            )
+            .order_by(Policy.id)
+            .limit(1)
+        )
+
+    def get_by_meeting_key(
+        self,
+        category_id: int,
+        title: str,
+        published_date: _date,
+    ) -> Policy | None:
+        """Return the earliest policy matching the cross-source meeting key.
+
+        The meeting key is ``(category_id, title, published_at)`` where
+        ``published_at`` is treated as a calendar date. This is the primary
+        cross-source dedup path: two articles about the same meeting reported
+        by different sources (news.cn / people.com.cn / cctv.com) carry the
+        same title and date even when their bodies differ in page chrome.
+        """
+
+        return self._session.scalar(
+            select(Policy)
+            .where(
+                Policy.category_id == category_id,
+                Policy.title == title,
+                func.date(Policy.published_at) == published_date,
             )
             .order_by(Policy.id)
             .limit(1)
