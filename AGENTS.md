@@ -93,6 +93,10 @@ src
 2. 代码提交并推送到到 Github 的 main 分支，成功之后，需要使用 API 的方式触发 Jenkins 的手工构建，Jenkins 的地址、用户名和密码见文档“生成Jenkinsfile的提示词.md”
 3. 在部署的时候注意不要把 config/app.json 给覆盖了，因为有可能在第一次部署之后 app.json 文件里面的配置被修改了
 
+## 其他
+
+1. 如果没有特殊要求，默认都用中文回答
+
 ## 附件
 
 ### password.txt 默认内容
