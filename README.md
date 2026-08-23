@@ -190,7 +190,7 @@ python scripts/reclean_policy_content.py --refetch               # 重抓 HTML �
 | `politburo` | 中央政治局会议 | 中央政治局会议 | 5 年 | `collectors/resources/xinhua_politburo_seed_urls.json` |
 | `finance_council` | 中央财经委员会会议 | 中央财经委员会会议 | 9 年 | `collectors/resources/xinhua_finance_council_seed_urls.json` |
 
-中央财经委员会种子清单现收录 14 条已核验通稿 URL（2018-04-02 第一次至 2025-07-01 二十届第六次，覆盖新华网 `xinhuanet.com` 与 `news.cn` 两种域名形态）。未收录的 3 次会议（十九届第七次 2020-04-10、二十届第三/五次）经多渠道核实当时未公开发布通稿（新华社、人民日报、央视新闻联播均无报道），按"无法核实的不入清单"原则跳过，后续如公开发布可由 RSS 发现机制自动补采。
+中央财经委员会种子清单现收录 15 条已核验通稿 URL（2018-04-02 第一次至 2025-07-01 二十届第六次，覆盖新华网 `xinhuanet.com`、`news.cn` 与人民网 `people.com.cn` 域名形态）。其中十九届第七次会议补充收录人民网发布的《习近平：国家中长期经济社会发展战略若干重大问题》，该文末尾标明为 2020-04-10 在中央财经委员会第七次会议上的讲话。未收录的 2 次会议（二十届第三/五次）经多渠道核实暂未发现公开发布通稿，按"无法核实的不入清单"原则跳过，后续如公开发布可由 RSS 发现机制自动补采。
 
 种子清单的离线校验：
 

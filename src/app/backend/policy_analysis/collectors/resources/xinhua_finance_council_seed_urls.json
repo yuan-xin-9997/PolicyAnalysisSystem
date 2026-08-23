@@ -42,6 +42,12 @@
     "is_verified": true
   },
   {
+    "url": "https://cpc.people.com.cn/n1/2020/1031/c64094-31913886.html",
+    "expected_title": "习近平：国家中长期经济社会发展战略若干重大问题",
+    "expected_published_date": "2020-10-31",
+    "is_verified": true
+  },
+  {
     "url": "https://www.xinhuanet.com/politics/leaders/2021-03/15/c_1127214607.htm",
     "expected_title": "习近平主持召开中央财经委员会第九次会议强调 推动平台经济规范健康持续发展 把碳达峰碳中和纳入生态文明建设整体布局",
     "expected_published_date": "2021-03-15",

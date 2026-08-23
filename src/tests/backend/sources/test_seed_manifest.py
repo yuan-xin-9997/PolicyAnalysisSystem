@@ -356,9 +356,19 @@ def test_load_seed_manifest_supports_finance_council_scenario() -> None:
 
     entries = load_seed_manifest(spec=FINANCE_COUNCIL_SPEC)
 
-    assert entries
-    assert all("中央财经委员会" in entry.expected_title for entry in entries)
+    assert len(entries) == 15
     assert all(entry.is_verified for entry in entries)
+    assert any(
+        entry.url == "https://cpc.people.com.cn/n1/2020/1031/c64094-31913886.html"
+        and entry.expected_title == "习近平：国家中长期经济社会发展战略若干重大问题"
+        and entry.expected_published_date == date(2020, 10, 31)
+        for entry in entries
+    )
+    assert all(
+        "中央财经委员会" in entry.expected_title
+        or entry.expected_title == "习近平：国家中长期经济社会发展战略若干重大问题"
+        for entry in entries
+    )
     dates = [entry.expected_published_date for entry in entries]
     assert dates == sorted(dates)
     assert min(dates) >= date(2018, 4, 1)

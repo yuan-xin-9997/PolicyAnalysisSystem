@@ -117,7 +117,7 @@ FINANCE_COUNCIL_SPEC = ScenarioSpec(
     history_years=9,
     earliest_date=date(2018, 4, 1),
     latest_date=date(2026, 8, 1),
-    title_must_contain=("中央财经委员会",),
+    title_must_contain=("中央财经委员会", "国家中长期经济社会发展战略若干重大问题"),
 )
 
 DEFAULT_SCENARIOS: tuple[ScenarioSpec, ...] = (POLITBURO_SPEC, FINANCE_COUNCIL_SPEC)
