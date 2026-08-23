@@ -206,7 +206,28 @@ def _ensure_default_source(session: Session) -> Source:
             is_active=True,
         )
         session.add(source)
+        return source
+    _widen_default_allowed_domains(source)
     return source
+
+
+def _widen_default_allowed_domains(source: Source) -> None:
+    """Merge default domains missing from an existing source row.
+
+    Sources created before a whitelist expansion keep their stored domains
+    and would reject seed URLs from newly added publishers, failing startup.
+    The merge is additive so admin-customized domains are preserved.
+    """
+
+    try:
+        stored = json.loads(source.allowed_domains_json)
+    except (TypeError, json.JSONDecodeError):
+        return
+    if not isinstance(stored, list) or any(not isinstance(item, str) for item in stored):
+        return
+    merged = list(dict.fromkeys([*stored, *_DEFAULT_ALLOWED_DOMAINS]))
+    if merged != stored:
+        source.allowed_domains_json = _encode_json(merged)
 
 
 def _ensure_rule(

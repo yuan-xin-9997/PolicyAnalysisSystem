@@ -22,7 +22,12 @@ from policy_analysis.main import create_app
 from policy_analysis.policies.models import Policy
 from policy_analysis.policies.schemas import PolicyWrite
 from policy_analysis.policies.service import PolicyService
-from policy_analysis.sources.bootstrap import load_seed_manifest
+from policy_analysis.sources.bootstrap import (
+    _DEFAULT_ALLOWED_DOMAINS,
+    FINANCE_COUNCIL_SPEC,
+    bootstrap_default_catalog,
+    load_seed_manifest,
+)
 from policy_analysis.sources.models import CollectionRule, PolicyCategory, SeedUrl, Source
 from policy_analysis.tasks.models import CrawlTask, CrawlTaskItem
 from sqlalchemy import func, select
@@ -270,6 +275,41 @@ def test_default_startup_bootstraps_both_default_scenarios(
 
     with _test_client(app), app.state.database_sessions() as database:
         assert database.scalar(select(func.count()).select_from(CollectionRule)) == 2
+
+
+def test_bootstrap_merges_default_domains_into_existing_source(
+    database_sessions,
+) -> None:
+    with database_sessions.begin() as database:
+        database.add(
+            Source(
+                code="xinhua",
+                name="新华网",
+                organization="新华社",
+                base_url="https://news.cn/",
+                adapter_type="xinhua",
+                allowed_domains_json='["news.cn", "custom.example"]',
+                is_active=True,
+            )
+        )
+
+    results = bootstrap_default_catalog(database_sessions)
+
+    assert set(results) == {"politburo", "finance_council"}
+    with database_sessions() as database:
+        source = database.scalar(select(Source).where(Source.code == "xinhua"))
+        assert source is not None
+        stored_domains = set(json.loads(source.allowed_domains_json))
+        assert stored_domains >= set(_DEFAULT_ALLOWED_DOMAINS)
+        assert "custom.example" in stored_domains
+        finance_rule = database.scalar(
+            select(CollectionRule).where(CollectionRule.name == "中央财经委员会会议")
+        )
+        assert finance_rule is not None
+        seed_count = database.scalar(
+            select(func.count()).select_from(SeedUrl).where(SeedUrl.rule_id == finance_rule.id)
+        )
+        assert seed_count == len(load_seed_manifest(spec=FINANCE_COUNCIL_SPEC))
 
 
 def test_runtime_migration_serializes_concurrent_upgrades_of_same_database(tmp_path: Path) -> None:
