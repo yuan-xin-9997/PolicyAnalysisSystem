@@ -35,7 +35,6 @@ export async function installMockApi(page: Page): Promise<void> {
     if (path === '/api/v1/collection-rules') return fulfillJson(route, [rule()])
     if (path === '/api/v1/sources') return fulfillJson(route, [source()])
     if (path === '/api/v1/policy-categories') return fulfillJson(route, [category()])
-    if (path === '/api/v1/schedules') return fulfillJson(route, [])
     if (path === '/api/v1/analysis/tasks' && method === 'POST') return fulfillJson(route, { task_id: 51, status: 'pending' })
     if (path === '/api/v1/analysis/tasks' && method === 'GET') return fulfillJson(route, analysisTaskPage())
     if (path === '/api/v1/analysis/tasks/51') return fulfillJson(route, analysisTask(51))
@@ -91,6 +90,12 @@ function rule(): object {
     history_years: 5,
     discovery: { rss_urls: ['https://www.news.cn/rss.xml'], channel_urls: [] },
     is_active: true,
+    trigger_mode: 'manual',
+    cron_expression: null,
+    schedule_timezone: 'Asia/Shanghai',
+    schedule_enabled: false,
+    next_run_at: null,
+    last_run_at: null,
     created_at: '2026-07-31T04:00:00Z',
     updated_at: '2026-07-31T04:00:00Z',
   }

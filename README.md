@@ -154,14 +154,22 @@ export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://your-webfetch-service'
 export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
 ```
 
-管理员登录后，在任务中心相关 API 中维护来源、采集规则和定时计划。首次回填建议流程：
+管理员登录后，在任务中心相关 API 中维护来源与采集规则。每条采集规则自带触发方式（`trigger_mode`）：
+
+- **手工触发（manual）**：仅在任务中心手工创建采集任务，系统不会自动运行；
+- **定时运行（schedule）**：按北京时间 5 段 Cron 表达式（`cron_expression`）由调度器自动创建采集任务，同时也支持手工立即触发一次；
+  - 保存定时配置后默认停用（`schedule_enabled=false`），确认手工回填结果正确后再勾选「启用定时运行」；
+  - 启用定时的规则必须处于启用状态；把规则切回手工触发会自动清空 Cron 与下次执行时间；
+  - 规则列表展示 Cron、启停状态、下次执行与上次执行时间，均以北京时间显示。
+
+首次回填建议流程：
 
 1. 创建或确认来源、政策类别和采集规则；
 2. 先使用 `POST /api/v1/tasks` 手工触发一次回填；
 3. 通过 `GET /api/v1/tasks/{task_id}` 查看终态和进度；
 4. 通过 `GET /api/v1/tasks/{task_id}/items` 查看每篇候选文章的处理结果；
 5. 通过 `GET /api/v1/tasks/{task_id}/logs` 查看采集日志和失败原因；
-6. 确认政策库检索结果正确后，再启用对应定时计划。
+6. 确认政策库检索结果正确后，再在采集规则中启用定时运行。
 
 常见失败会记录为稳定的 `reason_code`，例如标题未命中、正文过短、超出回填窗口、来源非官方、重复政策或 WebFetch 临时不可用。任务调度使用单进程 worker 和 APScheduler；`/health/ready` 会在 SQLite 可用且 worker 已启动时返回就绪。
 

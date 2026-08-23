@@ -9,15 +9,12 @@ from policy_analysis.core.errors import APIError
 from policy_analysis.sources.models import (
     CollectionRule,
     PolicyCategory,
-    Schedule,
     SeedUrl,
     Source,
 )
 from policy_analysis.sources.schemas import (
     CollectionRuleCreate,
     CollectionRuleUpdate,
-    ScheduleCreate,
-    ScheduleUpdate,
     SeedUrlImport,
 )
 from policy_analysis.sources.service import SourceService
@@ -461,68 +458,125 @@ def test_bad_allowed_domain_storage_produces_controlled_error_without_raw_value(
 
 
 @pytest.mark.parametrize("cron", ["0 2 * *", "0 2 * * * extra", "61 2 * * *", "bad cron value x y"])
-def test_schedule_rejects_non_five_field_or_invalid_cron(source_service: SourceService, cron: str) -> None:
+def test_rule_rejects_non_five_field_or_invalid_cron(source_service: SourceService, cron: str) -> None:
     rule = create_rule(source_service)
     assert_api_error(
         "INVALID_CRON",
         422,
-        lambda: source_service.create_schedule(
-            ScheduleCreate.model_validate({"rule_id": rule.id, "cron_expression": cron})
+        lambda: source_service.update_rule(
+            rule.id,
+            CollectionRuleUpdate.model_validate({"trigger_mode": "schedule", "cron_expression": cron}),
         ),
     )
 
 
-def test_schedule_lifecycle_uses_shanghai_cron_and_preserves_last_run(
+def test_trigger_mode_lifecycle_uses_shanghai_cron_and_preserves_last_run(
     source_service: SourceService,
     database_sessions: sessionmaker[Session],
 ) -> None:
     rule = create_rule(source_service)
-    schedule = source_service.create_schedule(
-        ScheduleCreate.model_validate({"rule_id": rule.id, "cron_expression": " 0  9 * * * "})
-    )
-    assert schedule.cron_expression == "0 9 * * *"
-    assert schedule.timezone == "Asia/Shanghai"
-    assert schedule.is_active is False
-    assert schedule.next_run_at is None
+    assert rule.trigger_mode == "manual"
+    assert rule.cron_expression is None
+    assert rule.schedule_enabled is False
 
-    enabled = source_service.update_schedule(schedule.id, ScheduleUpdate.model_validate({"is_active": True}))
+    switched = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"trigger_mode": "schedule", "cron_expression": " 0  9 * * * "}),
+    )
+    assert switched.trigger_mode == "schedule"
+    assert switched.cron_expression == "0 9 * * *"
+    assert switched.schedule_timezone == "Asia/Shanghai"
+    assert switched.schedule_enabled is False
+    assert switched.next_run_at is None
+
+    enabled = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"schedule_enabled": True}),
+    )
+    assert enabled.schedule_enabled is True
     assert enabled.next_run_at == datetime(2026, 8, 1, 1, 0, tzinfo=UTC)
     with database_sessions.begin() as database:
-        stored = database.get(Schedule, schedule.id)
+        stored = database.get(CollectionRule, rule.id)
         assert stored is not None
         stored.last_run_at = datetime(2026, 7, 31, 1, 0, tzinfo=UTC)
 
-    changed = source_service.update_schedule(
-        schedule.id,
-        ScheduleUpdate.model_validate({"cron_expression": "30 10 * * *"}),
+    changed = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"cron_expression": "30 10 * * *"}),
     )
     assert changed.next_run_at == datetime(2026, 8, 1, 2, 30, tzinfo=UTC)
     assert changed.last_run_at == datetime(2026, 7, 31, 1, 0, tzinfo=UTC)
 
-    disabled = source_service.update_schedule(
-        schedule.id, ScheduleUpdate.model_validate({"is_active": False})
+    disabled = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"schedule_enabled": False}),
     )
+    assert disabled.schedule_enabled is False
     assert disabled.next_run_at is None
     assert disabled.last_run_at == changed.last_run_at
+
+    reverted = source_service.update_rule(
+        rule.id,
+        CollectionRuleUpdate.model_validate({"trigger_mode": "manual"}),
+    )
+    assert reverted.trigger_mode == "manual"
+    assert reverted.cron_expression is None
+    assert reverted.schedule_enabled is False
+    assert reverted.next_run_at is None
+    assert reverted.last_run_at == disabled.last_run_at
+
     assert_api_error(
         "VALIDATION_ERROR",
         422,
-        lambda: source_service.update_schedule(schedule.id, ScheduleUpdate.model_validate({})),
+        lambda: source_service.update_rule(rule.id, CollectionRuleUpdate.model_validate({})),
     )
 
 
-def test_schedule_rejects_missing_rule_and_missing_resources(source_service: SourceService) -> None:
+def test_trigger_mode_rejects_incompatible_field_combinations(source_service: SourceService) -> None:
     assert_api_error(
-        "RULE_NOT_FOUND",
-        404,
-        lambda: source_service.create_schedule(
-            ScheduleCreate.model_validate({"rule_id": 9999, "cron_expression": "0 9 * * *"})
+        "RULE_TRIGGER_INVALID",
+        422,
+        lambda: create_rule(
+            source_service,
+            trigger_mode="manual",
+            cron_expression="0 9 * * *",
         ),
     )
     assert_api_error(
-        "SCHEDULE_NOT_FOUND",
+        "RULE_TRIGGER_INVALID",
+        422,
+        lambda: create_rule(source_service, trigger_mode="schedule"),
+    )
+    rule = create_rule(source_service)
+    assert_api_error(
+        "RULE_TRIGGER_INVALID",
+        422,
+        lambda: source_service.update_rule(
+            rule.id,
+            CollectionRuleUpdate.model_validate({"trigger_mode": "manual", "schedule_enabled": True}),
+        ),
+    )
+    scheduled = create_rule(
+        source_service,
+        trigger_mode="schedule",
+        cron_expression="0 9 * * *",
+        schedule_enabled=True,
+    )
+    assert_api_error(
+        "RULE_TRIGGER_INVALID",
+        422,
+        lambda: source_service.update_rule(
+            scheduled.id,
+            CollectionRuleUpdate.model_validate({"is_active": False}),
+        ),
+    )
+
+
+def test_rule_update_rejects_missing_resources(source_service: SourceService) -> None:
+    assert_api_error(
+        "RULE_NOT_FOUND",
         404,
-        lambda: source_service.update_schedule(9999, ScheduleUpdate.model_validate({"is_active": True})),
+        lambda: source_service.update_rule(9999, CollectionRuleUpdate.model_validate({"name": "不存在"})),
     )
 
 

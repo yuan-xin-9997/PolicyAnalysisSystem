@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, joinedload
 from policy_analysis.sources.models import (
     CollectionRule,
     PolicyCategory,
-    Schedule,
     SeedUrl,
     Source,
 )
@@ -52,26 +51,6 @@ class SourceRepository:
 
     def add_rule(self, rule: CollectionRule) -> None:
         self._session.add(rule)
-
-    def list_schedules(self) -> list[tuple[Schedule, str]]:
-        statement = (
-            select(Schedule, CollectionRule.name)
-            .join(CollectionRule, CollectionRule.id == Schedule.rule_id)
-            .order_by(Schedule.id)
-        )
-        return [(schedule, rule_name) for schedule, rule_name in self._session.execute(statement)]
-
-    def get_schedule(self, schedule_id: int) -> tuple[Schedule, str] | None:
-        statement = (
-            select(Schedule, CollectionRule.name)
-            .join(CollectionRule, CollectionRule.id == Schedule.rule_id)
-            .where(Schedule.id == schedule_id)
-        )
-        row = self._session.execute(statement).one_or_none()
-        return None if row is None else (row[0], row[1])
-
-    def add_schedule(self, schedule: Schedule) -> None:
-        self._session.add(schedule)
 
     def existing_seed_urls(self, rule_id: int, urls: Iterable[str]) -> set[str]:
         candidate_urls = tuple(urls)

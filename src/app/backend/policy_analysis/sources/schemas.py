@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
@@ -69,6 +69,9 @@ class CollectionRuleCreate(StrictModel):
     history_years: int = Field(default=5, ge=1, le=20)
     discovery: DiscoveryConfig
     is_active: bool = True
+    trigger_mode: Literal["manual", "schedule"] = "manual"
+    cron_expression: str | None = Field(default=None, max_length=128)
+    schedule_enabled: bool = False
 
     @field_validator("include_keywords", "exclude_keywords")
     @classmethod
@@ -85,11 +88,19 @@ class CollectionRuleUpdate(StrictModel):
     history_years: int | None = Field(default=None, ge=1, le=20)
     discovery: DiscoveryConfig | None = None
     is_active: bool | None = None
+    trigger_mode: Literal["manual", "schedule"] | None = None
+    cron_expression: str | None = Field(default=None, max_length=128)
+    schedule_enabled: bool | None = None
 
     @field_validator("include_keywords", "exclude_keywords")
     @classmethod
     def deduplicate_keywords(cls, values: list[str] | None) -> list[str] | None:
         return None if values is None else _deduplicate(values)
+
+    @field_validator("cron_expression")
+    @classmethod
+    def strip_cron(cls, value: str | None) -> str | None:
+        return None if value is None else " ".join(value.split())
 
     @model_validator(mode="after")
     def reject_explicit_nulls(self) -> CollectionRuleUpdate:
@@ -133,39 +144,14 @@ class CollectionRuleRead(StrictModel):
     history_years: int
     discovery: DiscoveryConfig
     is_active: bool
-    created_at: datetime
-    updated_at: datetime
-
-
-class ScheduleCreate(StrictModel):
-    rule_id: int = Field(ge=1)
-    cron_expression: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
-
-
-class ScheduleUpdate(StrictModel):
-    cron_expression: (
-        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)] | None
-    ) = None
-    is_active: bool | None = None
-
-    @model_validator(mode="after")
-    def reject_explicit_nulls(self) -> ScheduleUpdate:
-        if any(getattr(self, field_name) is None for field_name in self.model_fields_set):
-            raise ValueError("PATCH 字段不得为 null")
-        return self
-
-
-class ScheduleRead(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    id: int
-    rule_id: int
-    rule_name: str
-    cron_expression: str
-    timezone: str
-    is_active: bool
+    trigger_mode: Literal["manual", "schedule"]
+    cron_expression: str | None
+    schedule_timezone: str
+    schedule_enabled: bool
     next_run_at: datetime | None
     last_run_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class SeedUrlImport(StrictModel):

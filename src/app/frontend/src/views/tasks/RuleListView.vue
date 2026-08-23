@@ -15,6 +15,9 @@ const errorMessage = ref('')
 const rules = ref<CollectionRule[]>([])
 const sources = ref<SourceSummary[]>([])
 const categories = ref<PolicyCategory[]>([])
+const editingRuleId = ref<number | null>(null)
+
+const editingRule = computed(() => rules.value.find((rule) => rule.id === editingRuleId.value) ?? null)
 
 onMounted(() => {
   void loadAll()
@@ -43,6 +46,11 @@ function upsertRule(rule: CollectionRule): void {
   const index = rules.value.findIndex((item) => item.id === rule.id)
   if (index >= 0) rules.value[index] = rule
   else rules.value = [rule, ...rules.value]
+  editingRuleId.value = null
+}
+
+function startEditing(rule: CollectionRule): void {
+  editingRuleId.value = rule.id
 }
 </script>
 
@@ -59,7 +67,15 @@ function upsertRule(rule: CollectionRule): void {
     <p v-if="loading" role="status" class="state-card">正在加载采集配置</p>
     <p v-else-if="errorMessage" role="alert" class="state-card error-state">{{ errorMessage }}</p>
     <template v-else>
-      <RuleFormDialog v-if="isAdmin" :sources="sources" :categories="categories" @saved="upsertRule" />
+      <RuleFormDialog
+        v-if="isAdmin"
+        :key="editingRule?.id ?? 'create'"
+        :sources="sources"
+        :categories="categories"
+        :rule="editingRule"
+        @saved="upsertRule"
+        @cancelled="editingRuleId = null"
+      />
       <p v-else class="state-card">普通用户仅可查看规则，不能新增或编辑。</p>
 
       <table class="data-table">
@@ -72,8 +88,11 @@ function upsertRule(rule: CollectionRule): void {
             <th>包含词</th>
             <th>排除词</th>
             <th>历史窗口</th>
+            <th>触发方式</th>
+            <th>定时配置</th>
             <th>状态</th>
             <th>更新时间</th>
+            <th v-if="isAdmin">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -85,11 +104,22 @@ function upsertRule(rule: CollectionRule): void {
             <td>{{ rule.include_keywords.join('、') }}</td>
             <td>{{ rule.exclude_keywords.join('、') || '—' }}</td>
             <td>{{ rule.history_years }} 年</td>
+            <td>{{ rule.trigger_mode === 'schedule' ? '定时运行' : '手工触发' }}</td>
+            <td>
+              <template v-if="rule.trigger_mode === 'schedule'">
+                {{ rule.cron_expression }}（{{ rule.schedule_enabled ? '已启用' : '已停用' }}）<br />
+                下次 {{ formatBeijingTime(rule.next_run_at) }}
+              </template>
+              <template v-else>—</template>
+            </td>
             <td>{{ rule.is_active ? '启用' : '停用' }}</td>
             <td>{{ formatBeijingTime(rule.updated_at) }}</td>
+            <td v-if="isAdmin">
+              <button type="button" @click="startEditing(rule)">编辑</button>
+            </td>
           </tr>
           <tr v-if="rules.length === 0">
-            <td colspan="9">暂无采集规则</td>
+            <td :colspan="isAdmin ? 12 : 11">暂无采集规则</td>
           </tr>
         </tbody>
       </table>

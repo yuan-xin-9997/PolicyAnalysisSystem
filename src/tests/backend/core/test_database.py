@@ -195,7 +195,7 @@ def test_alembic_upgrade_uses_environment_overridden_temporary_database(tmp_path
     engine = build_engine(database_path)
     inspector = inspect(engine)
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
     assert {"users", "page_permissions", "sessions"}.issubset(inspector.get_table_names())
     assert {tuple(item["column_names"]) for item in inspector.get_unique_constraints("users")} >= {
         ("username",),

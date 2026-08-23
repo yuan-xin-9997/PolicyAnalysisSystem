@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from policy_analysis.sources.models import CollectionRule, PolicyCategory, Schedule, Source
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, Source
 from policy_analysis.tasks.models import CrawlTask, TaskStatus
 from policy_analysis.tasks.repository import TaskRepository
 from policy_analysis.tasks.scheduler import TaskScheduler
@@ -14,7 +14,15 @@ from sqlalchemy.orm import Session, sessionmaker
 NOW = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
 
 
-def seed_rule(database_sessions: sessionmaker[Session], *, name: str = "规则") -> int:
+def seed_rule(
+    database_sessions: sessionmaker[Session],
+    *,
+    name: str = "规则",
+    trigger_mode: str = "manual",
+    cron_expression: str | None = None,
+    schedule_enabled: bool = False,
+    next_run_at: datetime | None = None,
+) -> int:
     with database_sessions.begin() as database:
         category = PolicyCategory(
             code=f"category_{name}",
@@ -44,6 +52,11 @@ def seed_rule(database_sessions: sessionmaker[Session], *, name: str = "规则")
                 {"rss_urls": ["https://www.news.cn/rss.xml"], "channel_urls": []}
             ),
             is_active=True,
+            trigger_mode=trigger_mode,
+            cron_expression=cron_expression,
+            schedule_timezone="Asia/Shanghai",
+            schedule_enabled=schedule_enabled,
+            next_run_at=next_run_at,
         )
         database.add(rule)
         database.flush()
@@ -94,17 +107,13 @@ def test_worker_claims_only_one_running_task_per_rule(database_sessions: session
 def test_scheduler_creates_one_pending_task_per_schedule_time(
     database_sessions: sessionmaker[Session],
 ) -> None:
-    rule_id = seed_rule(database_sessions)
-    with database_sessions.begin() as database:
-        database.add(
-            Schedule(
-                rule_id=rule_id,
-                cron_expression="0 9 * * *",
-                timezone="Asia/Shanghai",
-                is_active=True,
-                next_run_at=NOW,
-            )
-        )
+    rule_id = seed_rule(
+        database_sessions,
+        trigger_mode="schedule",
+        cron_expression="0 9 * * *",
+        schedule_enabled=True,
+        next_run_at=NOW,
+    )
 
     scheduler = TaskScheduler(database_sessions, now=lambda: NOW)
 
@@ -118,19 +127,36 @@ def test_scheduler_creates_one_pending_task_per_schedule_time(
         assert len(tasks) == 1
         assert tasks[0].trigger_type == "schedule"
         assert tasks[0].scheduled_for == NOW
+        stored_rule = database.get(CollectionRule, rule_id)
+        assert stored_rule is not None
+        assert stored_rule.last_run_at == NOW
+        assert stored_rule.next_run_at == datetime(2026, 8, 1, 1, 0, tzinfo=UTC)
 
 
-def test_scheduler_ignores_inactive_schedules(database_sessions: sessionmaker[Session]) -> None:
-    rule_id = seed_rule(database_sessions)
+def test_scheduler_ignores_disabled_schedule_rules(database_sessions: sessionmaker[Session]) -> None:
+    seed_rule(
+        database_sessions,
+        trigger_mode="schedule",
+        cron_expression="0 9 * * *",
+        schedule_enabled=False,
+        next_run_at=NOW,
+    )
+
+    assert TaskScheduler(database_sessions, now=lambda: NOW).enqueue_due_tasks() == []
+
+
+def test_scheduler_ignores_manual_mode_and_inactive_rules(database_sessions: sessionmaker[Session]) -> None:
+    seed_rule(database_sessions, name="手工规则", trigger_mode="manual", next_run_at=NOW)
+    seed_rule(
+        database_sessions,
+        name="停用规则",
+        trigger_mode="schedule",
+        cron_expression="0 9 * * *",
+        schedule_enabled=True,
+        next_run_at=NOW,
+    )
     with database_sessions.begin() as database:
-        database.add(
-            Schedule(
-                rule_id=rule_id,
-                cron_expression="0 9 * * *",
-                timezone="Asia/Shanghai",
-                is_active=False,
-                next_run_at=NOW,
-            )
-        )
+        rule = database.scalars(select(CollectionRule).where(CollectionRule.name == "停用规则")).one()
+        rule.is_active = False
 
     assert TaskScheduler(database_sessions, now=lambda: NOW).enqueue_due_tasks() == []

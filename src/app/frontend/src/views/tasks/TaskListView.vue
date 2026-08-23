@@ -105,7 +105,6 @@ async function triggerManualTask(): Promise<void> {
       </div>
       <div class="filter-actions">
         <RouterLink to="/tasks/rules">采集规则</RouterLink>
-        <RouterLink to="/tasks/schedules">定时计划</RouterLink>
       </div>
     </div>
 

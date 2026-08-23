@@ -133,19 +133,14 @@ export interface CollectionRule {
   history_years: number
   discovery: { rss_urls: string[]; channel_urls: string[] }
   is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface Schedule {
-  id: number
-  rule_id: number
-  rule_name: string
-  cron_expression: string
-  timezone: 'Asia/Shanghai'
-  is_active: boolean
+  trigger_mode: 'manual' | 'schedule'
+  cron_expression: string | null
+  schedule_timezone: 'Asia/Shanghai'
+  schedule_enabled: boolean
   next_run_at: string | null
   last_run_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface EffectiveSettings {

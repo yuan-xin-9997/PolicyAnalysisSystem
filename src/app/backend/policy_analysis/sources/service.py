@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from policy_analysis.core.errors import APIError
-from policy_analysis.sources.models import CollectionRule, PolicyCategory, Schedule, SeedUrl, Source
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, SeedUrl, Source
 from policy_analysis.sources.repository import SourceRepository
 from policy_analysis.sources.schemas import (
     CollectionRuleCreate,
@@ -21,9 +21,6 @@ from policy_analysis.sources.schemas import (
     CollectionRuleUpdate,
     DiscoveryConfig,
     PolicyCategoryRead,
-    ScheduleCreate,
-    ScheduleRead,
-    ScheduleUpdate,
     SeedImportResult,
     SeedUrlImport,
     SourceRead,
@@ -64,6 +61,13 @@ class SourceService:
                 category = _require_category(repository, payload.category_code)
                 _validate_rule_bindings(source, category, is_active=payload.is_active)
                 _validate_discovery_domains(payload.discovery, source)
+                cron_expression, next_run_at = _resolve_trigger_config(
+                    trigger_mode=payload.trigger_mode,
+                    cron_expression=payload.cron_expression,
+                    schedule_enabled=payload.schedule_enabled,
+                    is_active=payload.is_active,
+                    now=self._now(),
+                )
                 rule = CollectionRule(
                     source_id=source.id,
                     category_id=category.id,
@@ -73,6 +77,12 @@ class SourceService:
                     history_years=payload.history_years,
                     discovery_config_json=_encode_json(payload.discovery.model_dump()),
                     is_active=payload.is_active,
+                    trigger_mode=payload.trigger_mode,
+                    cron_expression=cron_expression,
+                    schedule_timezone=SHANGHAI_TIMEZONE,
+                    schedule_enabled=payload.schedule_enabled,
+                    next_run_at=next_run_at,
+                    last_run_at=None,
                     source=source,
                     category=category,
                 )
@@ -140,6 +150,24 @@ class SourceService:
                 _validate_rule_bindings(source, category, is_active=merged.is_active)
                 _validate_discovery_domains(merged.discovery, source)
 
+                trigger_mode = values.get("trigger_mode", rule.trigger_mode)
+                if trigger_mode == "manual":
+                    # 切换回手工触发即清空定时配置；请求不得再携带 cron 或启用标记。
+                    if values.get("cron_expression") is not None or values.get("schedule_enabled", False):
+                        raise _trigger_error("手工触发规则不能配置 Cron 或启用定时。")
+                    effective_cron: str | None = None
+                    effective_enabled = False
+                else:
+                    effective_cron = values.get("cron_expression", rule.cron_expression)
+                    effective_enabled = values.get("schedule_enabled", rule.schedule_enabled)
+                cron_expression, next_run_at = _resolve_trigger_config(
+                    trigger_mode=trigger_mode,
+                    cron_expression=effective_cron,
+                    schedule_enabled=effective_enabled,
+                    is_active=merged.is_active,
+                    now=self._now(),
+                )
+
                 rule.source_id = source.id
                 rule.category_id = category.id
                 rule.source = source
@@ -150,69 +178,15 @@ class SourceService:
                 rule.history_years = merged.history_years
                 rule.discovery_config_json = _encode_json(merged.discovery.model_dump())
                 rule.is_active = merged.is_active
+                rule.trigger_mode = trigger_mode
+                rule.cron_expression = cron_expression
+                rule.schedule_timezone = SHANGHAI_TIMEZONE
+                rule.schedule_enabled = effective_enabled
+                rule.next_run_at = next_run_at
                 session.flush()
                 result = _rule_to_read(rule)
         except IntegrityError:
             raise _conflict("RULE_CONFLICT", "采集规则与现有数据冲突。") from None
-        return result
-
-    def list_schedules(self) -> list[ScheduleRead]:
-        with self._sessions() as session:
-            return [
-                _schedule_to_read(schedule, rule_name)
-                for schedule, rule_name in SourceRepository(session).list_schedules()
-            ]
-
-    def create_schedule(self, payload: ScheduleCreate) -> ScheduleRead:
-        cron_expression, trigger = _parse_cron(payload.cron_expression)
-        del trigger
-        try:
-            with self._sessions.begin() as session:
-                repository = SourceRepository(session)
-                rule = repository.get_rule(payload.rule_id)
-                if rule is None:
-                    raise _not_found("RULE_NOT_FOUND", "采集规则不存在。")
-                schedule = Schedule(
-                    rule_id=rule.id,
-                    cron_expression=cron_expression,
-                    timezone=SHANGHAI_TIMEZONE,
-                    is_active=False,
-                    next_run_at=None,
-                    last_run_at=None,
-                )
-                repository.add_schedule(schedule)
-                session.flush()
-                result = _schedule_to_read(schedule, rule.name)
-        except IntegrityError:
-            raise _conflict("SCHEDULE_CONFLICT", "定时计划与现有数据冲突。") from None
-        return result
-
-    def update_schedule(
-        self,
-        schedule_id: int,
-        payload: ScheduleUpdate,
-    ) -> ScheduleRead:
-        if not payload.model_fields_set:
-            raise _validation_error()
-        try:
-            with self._sessions.begin() as session:
-                repository = SourceRepository(session)
-                stored = repository.get_schedule(schedule_id)
-                if stored is None:
-                    raise _not_found("SCHEDULE_NOT_FOUND", "定时计划不存在。")
-                schedule, rule_name = stored
-                values = payload.model_dump(exclude_unset=True)
-                expression = values.get("cron_expression", schedule.cron_expression)
-                cron_expression, trigger = _parse_cron(expression)
-                is_active = values.get("is_active", schedule.is_active)
-                schedule.cron_expression = cron_expression
-                schedule.timezone = SHANGHAI_TIMEZONE
-                schedule.is_active = is_active
-                schedule.next_run_at = _next_run(trigger, self._now()) if is_active else None
-                session.flush()
-                result = _schedule_to_read(schedule, rule_name)
-        except IntegrityError:
-            raise _conflict("SCHEDULE_CONFLICT", "定时计划与现有数据冲突。") from None
         return result
 
     def import_seed_urls(
@@ -293,21 +267,14 @@ def _rule_to_read(rule: CollectionRule) -> CollectionRuleRead:
         history_years=rule.history_years,
         discovery=_decode_discovery(rule.discovery_config_json),
         is_active=rule.is_active,
+        trigger_mode=rule.trigger_mode,
+        cron_expression=rule.cron_expression,
+        schedule_timezone=rule.schedule_timezone,
+        schedule_enabled=rule.schedule_enabled,
+        next_run_at=rule.next_run_at,
+        last_run_at=rule.last_run_at,
         created_at=rule.created_at,
         updated_at=rule.updated_at,
-    )
-
-
-def _schedule_to_read(schedule: Schedule, rule_name: str) -> ScheduleRead:
-    return ScheduleRead(
-        id=schedule.id,
-        rule_id=schedule.rule_id,
-        rule_name=rule_name,
-        cron_expression=schedule.cron_expression,
-        timezone=schedule.timezone,
-        is_active=schedule.is_active,
-        next_run_at=schedule.next_run_at,
-        last_run_at=schedule.last_run_at,
     )
 
 
@@ -411,6 +378,29 @@ def _parse_cron(expression: str) -> tuple[str, CronTrigger]:
     return normalized, trigger
 
 
+def _resolve_trigger_config(
+    *,
+    trigger_mode: str,
+    cron_expression: str | None,
+    schedule_enabled: bool,
+    is_active: bool,
+    now: datetime,
+) -> tuple[str | None, datetime | None]:
+    """Validate trigger fields and derive (cron_expression, next_run_at)."""
+
+    if trigger_mode == "manual":
+        if cron_expression is not None or schedule_enabled:
+            raise _trigger_error("手工触发规则不能配置 Cron 或启用定时。")
+        return None, None
+    if not cron_expression:
+        raise _trigger_error("定时运行规则必须配置 Cron 表达式。")
+    cron, trigger = _parse_cron(cron_expression)
+    if schedule_enabled and not is_active:
+        raise _trigger_error("启用定时的规则必须处于启用状态，请先启用规则。")
+    next_run_at = _next_run(trigger, now) if schedule_enabled else None
+    return cron, next_run_at
+
+
 def _next_run(trigger: CronTrigger, now: datetime) -> datetime:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("时间源必须返回 aware datetime")
@@ -434,6 +424,10 @@ def _url_not_allowed() -> APIError:
 
 def _validation_error() -> APIError:
     return APIError(status_code=422, code="VALIDATION_ERROR", message="请求参数无效。")
+
+
+def _trigger_error(message: str) -> APIError:
+    return APIError(status_code=422, code="RULE_TRIGGER_INVALID", message=message)
 
 
 def _conflict(code: str, message: str) -> APIError:

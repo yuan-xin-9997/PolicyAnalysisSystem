@@ -1,4 +1,4 @@
-"""Source, collection-rule, and schedule HTTP routes."""
+"""Source and collection-rule HTTP routes."""
 
 from __future__ import annotations
 
@@ -14,9 +14,6 @@ from policy_analysis.sources.schemas import (
     CollectionRuleRead,
     CollectionRuleUpdate,
     PolicyCategoryRead,
-    ScheduleCreate,
-    ScheduleRead,
-    ScheduleUpdate,
     SourceRead,
 )
 from policy_analysis.sources.service import SourceService
@@ -80,7 +77,9 @@ def create_collection_rule(
     service: SourceService = Depends(get_source_service),
 ) -> CollectionRuleRead:
     _reject_query_parameters(request)
-    return service.create_rule(payload)
+    result = service.create_rule(payload)
+    _sync_task_scheduler(request)
+    return result
 
 
 @router.patch("/collection-rules/{rule_id}", response_model=CollectionRuleRead)
@@ -92,46 +91,7 @@ def update_collection_rule(
     service: SourceService = Depends(get_source_service),
 ) -> CollectionRuleRead:
     _reject_query_parameters(request)
-    return service.update_rule(rule_id, payload)
-
-
-@router.get("/schedules", response_model=list[ScheduleRead])
-def list_schedules(
-    request: Request,
-    _user: PublicUser = Depends(require_tasks_page),
-    service: SourceService = Depends(get_source_service),
-) -> list[ScheduleRead]:
-    _reject_query_parameters(request)
-    return service.list_schedules()
-
-
-@router.post(
-    "/schedules",
-    response_model=ScheduleRead,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_schedule(
-    payload: ScheduleCreate,
-    request: Request,
-    _admin: PublicUser = Depends(require_admin_csrf),
-    service: SourceService = Depends(get_source_service),
-) -> ScheduleRead:
-    _reject_query_parameters(request)
-    result = service.create_schedule(payload)
-    _sync_task_scheduler(request)
-    return result
-
-
-@router.patch("/schedules/{schedule_id}", response_model=ScheduleRead)
-def update_schedule(
-    schedule_id: PositiveId,
-    payload: ScheduleUpdate,
-    request: Request,
-    _admin: PublicUser = Depends(require_admin_csrf),
-    service: SourceService = Depends(get_source_service),
-) -> ScheduleRead:
-    _reject_query_parameters(request)
-    result = service.update_schedule(schedule_id, payload)
+    result = service.update_rule(rule_id, payload)
     _sync_task_scheduler(request)
     return result
 

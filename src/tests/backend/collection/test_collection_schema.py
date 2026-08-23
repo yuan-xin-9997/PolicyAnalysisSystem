@@ -21,7 +21,6 @@ COLLECTION_TABLES = {
     "sources",
     "collection_rules",
     "seed_urls",
-    "schedules",
     "policies",
     "policy_revisions",
     "crawl_tasks",
@@ -177,10 +176,16 @@ def test_create_schema_has_auth_and_all_collection_tables_with_required_nullabil
                 "history_years",
                 "discovery_config_json",
                 "is_active",
+                "trigger_mode",
+                "cron_expression",
+                "schedule_timezone",
+                "schedule_enabled",
+                "next_run_at",
+                "last_run_at",
                 "created_at",
                 "updated_at",
             },
-            set(),
+            {"cron_expression", "next_run_at", "last_run_at"},
         ),
         "seed_urls": (
             {
@@ -193,10 +198,6 @@ def test_create_schema_has_auth_and_all_collection_tables_with_required_nullabil
                 "created_at",
             },
             set(),
-        ),
-        "schedules": (
-            {"id", "rule_id", "cron_expression", "timezone", "is_active", "next_run_at", "last_run_at"},
-            {"next_run_at", "last_run_at"},
         ),
         "policies": (
             {
@@ -462,8 +463,8 @@ def test_json_text_columns_reject_blank_text(tmp_path, model_name: str, field_na
         assert category.code == "politburo"
 
 
-def test_rule_deletion_cascades_seed_urls_and_schedules(tmp_path) -> None:
-    from policy_analysis.sources.models import Schedule, SeedUrl
+def test_rule_deletion_cascades_seed_urls(tmp_path) -> None:
+    from policy_analysis.sources.models import SeedUrl
 
     engine = _new_engine(tmp_path)
     with session_factory(engine)() as session:
@@ -475,17 +476,15 @@ def test_rule_deletion_cascades_seed_urls_and_schedules(tmp_path) -> None:
             expected_published_date=date(2026, 8, 1),
             is_verified=True,
         )
-        schedule = Schedule(rule_id=rule.id, cron_expression="0 2 * * *")
-        session.add_all([seed, schedule])
+        session.add(seed)
         session.commit()
-        seed_id, schedule_id, rule_id = seed.id, schedule.id, rule.id
+        seed_id, rule_id = seed.id, rule.id
 
         session.execute(delete(type(rule)).where(type(rule).id == rule_id))
         session.commit()
         session.expunge_all()
 
         assert session.get(type(seed), seed_id) is None
-        assert session.get(type(schedule), schedule_id) is None
 
 
 def test_task_deletion_cascades_items_and_logs_but_preserves_revision(tmp_path) -> None:
@@ -678,8 +677,9 @@ def test_alembic_collection_schema_matches_orm_and_round_trips(tmp_path, monkeyp
         command.upgrade(config, "head")
         migration_engine = build_engine(migration_path)
         assert set(inspect(migration_engine).get_table_names()) >= AUTH_TABLES | COLLECTION_TABLES
+        assert "schedules" not in set(inspect(migration_engine).get_table_names())
         with migration_engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
             assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
         for table_name in COLLECTION_TABLES:
             assert _schema_signature(migration_engine, table_name) == _schema_signature(
@@ -702,7 +702,7 @@ def test_alembic_collection_schema_matches_orm_and_round_trips(tmp_path, monkeyp
         upgraded_again_engine = build_engine(migration_path)
         assert set(inspect(upgraded_again_engine).get_table_names()) >= AUTH_TABLES | COLLECTION_TABLES
         with upgraded_again_engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
     finally:
         orm_engine.dispose()
         if migration_engine is not None:
@@ -711,6 +711,92 @@ def test_alembic_collection_schema_matches_orm_and_round_trips(tmp_path, monkeyp
             downgraded_engine.dispose()
         if upgraded_again_engine is not None:
             upgraded_again_engine.dispose()
+
+
+def test_migration_0006_folds_schedules_into_rules_and_drops_table(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = Path(__file__).resolve().parents[4]
+    database_path = tmp_path / "migrated.sqlite3"
+    for environment_name in list(os.environ):
+        if environment_name.startswith("POLICY_ANALYSIS_"):
+            monkeypatch.delenv(environment_name)
+    monkeypatch.setenv("POLICY_ANALYSIS_DATABASE__PATH", str(database_path))
+    config = Config(str(project_root / "alembic.ini"))
+    command.upgrade(config, "0005")
+    engine = build_engine(database_path)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO policy_categories (code, name) VALUES "
+                    "('politburo_meeting', '中央政治局会议')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO sources (code, name, organization, base_url, adapter_type, "
+                    "allowed_domains_json) VALUES ('xinhua', '新华网', '新华社', "
+                    "'https://www.news.cn/', 'xinhua', '[\"news.cn\"]')"
+                )
+            )
+            for _rule_id, name in ((1, "定时规则"), (2, "手工规则")):
+                connection.execute(
+                    text(
+                        "INSERT INTO collection_rules (source_id, category_id, name, "
+                        "include_keywords_json, exclude_keywords_json, history_years, "
+                        "discovery_config_json, is_active, created_at, updated_at) VALUES "
+                        f"(1, 1, '{name}', '[\"会议\"]', '[]', 5, '{{}}', 1, "
+                        "'2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')"
+                    )
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO schedules (rule_id, cron_expression, timezone, is_active, "
+                    "next_run_at, last_run_at) VALUES "
+                    "(1, '0 2 * * *', 'Asia/Shanghai', 0, NULL, NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO schedules (rule_id, cron_expression, timezone, is_active, "
+                    "next_run_at, last_run_at) VALUES "
+                    "(1, '0 9 * * *', 'Asia/Shanghai', 1, '2026-08-01T01:00:00+00:00', "
+                    "'2026-07-31T01:00:00+00:00')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = build_engine(database_path)
+    try:
+        with engine.connect() as connection:
+            assert "schedules" not in set(inspect(engine).get_table_names())
+            merged = connection.execute(
+                text(
+                    "SELECT trigger_mode, cron_expression, schedule_timezone, schedule_enabled, "
+                    "next_run_at, last_run_at FROM collection_rules WHERE id = 1"
+                )
+            ).one()
+            assert merged == (
+                "schedule",
+                "0 9 * * *",
+                "Asia/Shanghai",
+                1,
+                "2026-08-01T01:00:00+00:00",
+                "2026-07-31T01:00:00+00:00",
+            )
+            manual = connection.execute(
+                text(
+                    "SELECT trigger_mode, cron_expression, schedule_enabled FROM collection_rules "
+                    "WHERE id = 2"
+                )
+            ).one()
+            assert manual == ("manual", None, 0)
+    finally:
+        engine.dispose()
 
 
 def test_task_status_enums_expose_persisted_string_values() -> None:

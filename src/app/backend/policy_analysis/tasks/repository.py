@@ -14,7 +14,7 @@ from urllib.parse import unquote
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
-from policy_analysis.sources.models import CollectionRule, Schedule, SeedUrl
+from policy_analysis.sources.models import CollectionRule, SeedUrl
 from policy_analysis.tasks.models import CrawlTask, CrawlTaskItem, CrawlTaskLog, TaskItemStatus, TaskStatus
 from policy_analysis.tasks.schemas import TaskRequestSnapshot
 from policy_analysis.tasks.state import transition
@@ -152,24 +152,32 @@ class TaskRepository:
 
     def create_scheduled_task_once(
         self,
-        schedule_id: int,
+        rule_id: int,
         scheduled_for: datetime,
         now: datetime,
+        *,
+        next_run_at: datetime | None = None,
     ) -> CrawlTask | None:
         scheduled_for = _utc(scheduled_for)
+        next_run_at = None if next_run_at is None else _utc(next_run_at)
         with _SCHEDULE_LOCK:
             with self._sessions() as session:
-                schedule = session.get(Schedule, schedule_id)
-                if schedule is None or not schedule.is_active:
+                rule = session.get(CollectionRule, rule_id)
+                if (
+                    rule is None
+                    or rule.trigger_mode != "schedule"
+                    or not rule.schedule_enabled
+                    or not rule.is_active
+                ):
                     return None
                 existing = session.scalar(
                     select(CrawlTask.id).where(
                         CrawlTask.trigger_type == "schedule",
-                        CrawlTask.rule_id == schedule.rule_id,
+                        CrawlTask.rule_id == rule.id,
                         CrawlTask.scheduled_for == scheduled_for,
                     )
                 )
-                rule_id = schedule.rule_id
+                rule_id = rule.id
             if existing is not None:
                 return None
             created = self.create_task(
@@ -180,9 +188,10 @@ class TaskRepository:
                 scheduled_for=scheduled_for,
             )
             with self._sessions.begin() as session:
-                schedule = session.get(Schedule, schedule_id)
-                if schedule is not None:
-                    schedule.last_run_at = scheduled_for
+                rule = session.get(CollectionRule, rule_id)
+                if rule is not None:
+                    rule.last_run_at = scheduled_for
+                    rule.next_run_at = next_run_at
             return created
 
     def claim_next(self, now: datetime) -> int | None:
@@ -354,30 +363,53 @@ class TaskRepository:
             session.expunge_all()
             return items, total
 
-    def due_schedules(self, now: datetime) -> list[Schedule]:
+    def due_scheduled_rules(self, now: datetime) -> list[CollectionRule]:
         now = _utc(now)
         with self._sessions() as session:
-            schedules = list(
+            rules = list(
                 session.scalars(
-                    select(Schedule)
+                    select(CollectionRule)
                     .where(
-                        Schedule.is_active.is_(True),
-                        Schedule.next_run_at.is_not(None),
-                        Schedule.next_run_at <= now,
+                        CollectionRule.trigger_mode == "schedule",
+                        CollectionRule.schedule_enabled.is_(True),
+                        CollectionRule.is_active.is_(True),
+                        CollectionRule.next_run_at.is_not(None),
+                        CollectionRule.next_run_at <= now,
                     )
-                    .order_by(Schedule.id)
+                    .order_by(CollectionRule.id)
                 )
             )
             session.expunge_all()
-            return schedules
+            return rules
 
-    def enabled_schedules(self) -> list[Schedule]:
+    def scheduled_rules(self) -> list[CollectionRule]:
         with self._sessions() as session:
-            schedules = list(
-                session.scalars(select(Schedule).where(Schedule.is_active.is_(True)).order_by(Schedule.id))
+            rules = list(
+                session.scalars(
+                    select(CollectionRule)
+                    .where(
+                        CollectionRule.trigger_mode == "schedule",
+                        CollectionRule.schedule_enabled.is_(True),
+                        CollectionRule.is_active.is_(True),
+                    )
+                    .order_by(CollectionRule.id)
+                )
             )
             session.expunge_all()
-            return schedules
+            return rules
+
+    def get_scheduled_rule(self, rule_id: int) -> CollectionRule | None:
+        with self._sessions() as session:
+            rule = session.get(CollectionRule, rule_id)
+            if (
+                rule is None
+                or rule.trigger_mode != "schedule"
+                or not rule.schedule_enabled
+                or not rule.is_active
+            ):
+                return None
+            session.expunge_all()
+            return rule
 
     def create_item(self, task_id: int, candidate_url: str, normalized_url: str, now: datetime) -> int:
         with self._sessions.begin() as session:

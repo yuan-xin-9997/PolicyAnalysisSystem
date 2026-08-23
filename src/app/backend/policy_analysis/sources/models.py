@@ -106,6 +106,27 @@ class CollectionRule(Base):
         server_default=text("1"),
         nullable=False,
     )
+    trigger_mode: Mapped[str] = mapped_column(
+        String(16),
+        default="manual",
+        server_default=text("'manual'"),
+        nullable=False,
+    )
+    cron_expression: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    schedule_timezone: Mapped[str] = mapped_column(
+        String(64),
+        default="Asia/Shanghai",
+        server_default=text("'Asia/Shanghai'"),
+        nullable=False,
+    )
+    schedule_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+    )
+    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(),
@@ -141,32 +162,3 @@ class SeedUrl(Base):
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now, nullable=False)
-
-
-class Schedule(Base):
-    __tablename__ = "schedules"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    rule_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "collection_rules.id",
-            ondelete="CASCADE",
-            name="fk_schedules_rule_id_collection_rules",
-        ),
-        nullable=False,
-    )
-    cron_expression: Mapped[str] = mapped_column(String(128), nullable=False)
-    timezone: Mapped[str] = mapped_column(
-        String(64),
-        default="Asia/Shanghai",
-        server_default=text("'Asia/Shanghai'"),
-        nullable=False,
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        server_default=text("0"),
-        nullable=False,
-    )
-    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
-    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)

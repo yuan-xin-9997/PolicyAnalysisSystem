@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from policy_analysis.auth.models import PagePermission, User
-from policy_analysis.sources.models import CollectionRule, PolicyCategory, Schedule, Source
+from policy_analysis.sources.models import CollectionRule, PolicyCategory, Source
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -52,7 +52,7 @@ def rule_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient) -> None:
+def test_admin_can_read_and_manage_rules_and_trigger_modes(admin_client: TestClient) -> None:
     class FakeScheduler:
         is_started = True
 
@@ -74,6 +74,10 @@ def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient)
     assert created.status_code == 201
     assert created.json()["history_years"] == 5
     assert created.json()["source"]["code"] == "xinhua"
+    assert created.json()["trigger_mode"] == "manual"
+    assert created.json()["cron_expression"] is None
+    assert created.json()["schedule_enabled"] is False
+    assert admin_client.app.state.task_scheduler.synced == 1
     rule_id = created.json()["id"]
 
     listed = admin_client.get("/api/v1/collection-rules")
@@ -88,30 +92,42 @@ def test_admin_can_read_and_manage_rules_and_schedules(admin_client: TestClient)
     )
     assert patched.status_code == 200
     assert patched.json()["name"] == "更新会议规则"
+    assert admin_client.app.state.task_scheduler.synced == 2
 
-    scheduled = admin_client.post(
-        "/api/v1/schedules",
-        json={"rule_id": rule_id, "cron_expression": "0 9 * * *"},
+    switched = admin_client.patch(
+        f"/api/v1/collection-rules/{rule_id}",
+        json={"trigger_mode": "schedule", "cron_expression": "0  9 * * *"},
         headers=csrf(admin_client),
     )
-    assert scheduled.status_code == 201
-    assert admin_client.app.state.task_scheduler.synced == 1
-    assert scheduled.json()["is_active"] is False
-    assert scheduled.json()["next_run_at"] is None
-    schedule_id = scheduled.json()["id"]
+    assert switched.status_code == 200
+    assert admin_client.app.state.task_scheduler.synced == 3
+    assert switched.json()["trigger_mode"] == "schedule"
+    assert switched.json()["cron_expression"] == "0 9 * * *"
+    assert switched.json()["schedule_enabled"] is False
+    assert switched.json()["next_run_at"] is None
 
     enabled = admin_client.patch(
-        f"/api/v1/schedules/{schedule_id}",
-        json={"is_active": True},
+        f"/api/v1/collection-rules/{rule_id}",
+        json={"schedule_enabled": True},
         headers=csrf(admin_client),
     )
     assert enabled.status_code == 200
-    assert admin_client.app.state.task_scheduler.synced == 2
-    assert enabled.json()["is_active"] is True
-    assert enabled.json()["timezone"] == "Asia/Shanghai"
+    assert admin_client.app.state.task_scheduler.synced == 4
+    assert enabled.json()["schedule_enabled"] is True
+    assert enabled.json()["schedule_timezone"] == "Asia/Shanghai"
     assert enabled.json()["next_run_at"].endswith(("Z", "+00:00"))
-    listed_schedules = admin_client.get("/api/v1/schedules")
-    assert [item["id"] for item in listed_schedules.json()] == [schedule_id]
+
+    reverted = admin_client.patch(
+        f"/api/v1/collection-rules/{rule_id}",
+        json={"trigger_mode": "manual"},
+        headers=csrf(admin_client),
+    )
+    assert reverted.status_code == 200
+    assert admin_client.app.state.task_scheduler.synced == 5
+    assert reverted.json()["trigger_mode"] == "manual"
+    assert reverted.json()["cron_expression"] is None
+    assert reverted.json()["schedule_enabled"] is False
+    assert reverted.json()["next_run_at"] is None
 
 
 def test_read_endpoints_require_authentication_and_tasks_permission(
@@ -123,7 +139,6 @@ def test_read_endpoints_require_authentication_and_tasks_permission(
         "/api/v1/policy-categories",
         "/api/v1/sources",
         "/api/v1/collection-rules",
-        "/api/v1/schedules",
     ]
     for path in paths:
         assert client.get(path).status_code == 401
@@ -167,7 +182,6 @@ def test_writes_require_admin_and_csrf(
 @pytest.mark.parametrize(
     ("method", "path", "payload", "expected_status"),
     [
-        ("post", "/api/v1/schedules", {"rule_id": 999, "cron_expression": "0 9 * *"}, 422),
         (
             "post",
             "/api/v1/collection-rules",
@@ -176,7 +190,6 @@ def test_writes_require_admin_and_csrf(
         ),
         ("patch", "/api/v1/collection-rules/999", {}, 422),
         ("patch", "/api/v1/collection-rules/999", {"name": "有效名称"}, 404),
-        ("patch", "/api/v1/schedules/999", {"is_active": True}, 404),
     ],
 )
 def test_api_maps_invalid_and_missing_resources_to_safe_error_envelopes(
@@ -199,12 +212,42 @@ def test_api_maps_invalid_and_missing_resources_to_safe_error_envelopes(
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {"trigger_mode": "schedule"},
+        {"trigger_mode": "schedule", "cron_expression": "0 9 * *"},
+        {"trigger_mode": "manual", "cron_expression": "0 9 * * *"},
+    ],
+)
+def test_api_maps_invalid_trigger_configuration_to_safe_error_envelopes(
+    admin_client: TestClient,
+    payload: dict[str, object],
+) -> None:
+    rule = admin_client.post(
+        "/api/v1/collection-rules", json=rule_payload(), headers=csrf(admin_client)
+    ).json()
+    response = admin_client.patch(
+        f"/api/v1/collection-rules/{rule['id']}",
+        json=payload,
+        headers=csrf(admin_client),
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert set(body) == {"error"}
+    assert set(body["error"]) == {"code", "message", "request_id", "details"}
+    serialized = json.dumps(body, ensure_ascii=False)
+    assert "sqlite" not in serialized.lower()
+    assert "/Users/" not in serialized
+    assert "csrf" not in serialized.lower()
+    assert "session" not in serialized.lower()
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "/api/v1/policy-categories?unexpected=1",
         "/api/v1/sources?unexpected=1",
         "/api/v1/collection-rules?unexpected=1",
-        "/api/v1/schedules?unexpected=1",
     ],
 )
 def test_list_endpoints_reject_undeclared_query_parameters(admin_client: TestClient, path: str) -> None:
@@ -222,11 +265,6 @@ def test_write_endpoints_reject_undeclared_query_parameters_before_mutation(
         json=rule_payload(),
         headers=csrf(admin_client),
     ).json()
-    schedule = admin_client.post(
-        "/api/v1/schedules",
-        json={"rule_id": rule["id"], "cron_expression": "0 9 * * *"},
-        headers=csrf(admin_client),
-    ).json()
     requests = [
         (
             "post",
@@ -239,14 +277,9 @@ def test_write_endpoints_reject_undeclared_query_parameters_before_mutation(
             {"name": "不应写入的名称"},
         ),
         (
-            "post",
-            "/api/v1/schedules?unexpected=1",
-            {"rule_id": rule["id"], "cron_expression": "30 9 * * *"},
-        ),
-        (
             "patch",
-            f"/api/v1/schedules/{schedule['id']}?unexpected=1",
-            {"is_active": True},
+            f"/api/v1/collection-rules/{rule['id']}?unexpected=1",
+            {"trigger_mode": "schedule", "cron_expression": "30 9 * * *"},
         ),
     ]
 
@@ -257,28 +290,22 @@ def test_write_endpoints_reject_undeclared_query_parameters_before_mutation(
 
     with database_sessions() as database:
         rules = list(database.scalars(select(CollectionRule)))
-        schedules = list(database.scalars(select(Schedule)))
         assert len(rules) == 1
         assert rules[0].name == "中央政治局会议"
-        assert len(schedules) == 1
-        assert schedules[0].is_active is False
+        assert rules[0].trigger_mode == "manual"
 
 
 def test_schema_rejects_client_controlled_schedule_fields_and_extra_rule_fields(
     admin_client: TestClient,
 ) -> None:
-    rule = admin_client.post(
-        "/api/v1/collection-rules", json=rule_payload(), headers=csrf(admin_client)
-    ).json()
     for extra in [
-        {"timezone": "UTC"},
-        {"is_active": True},
+        {"schedule_timezone": "UTC"},
         {"next_run_at": "2026-08-01T00:00:00Z"},
         {"last_run_at": "2026-08-01T00:00:00Z"},
     ]:
         response = admin_client.post(
-            "/api/v1/schedules",
-            json={"rule_id": rule["id"], "cron_expression": "0 9 * * *", **extra},
+            "/api/v1/collection-rules",
+            json={**rule_payload(), "trigger_mode": "schedule", "cron_expression": "0 9 * * *", **extra},
             headers=csrf(admin_client),
         )
         assert response.status_code == 422
