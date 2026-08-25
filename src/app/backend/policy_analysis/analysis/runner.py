@@ -81,9 +81,7 @@ class AnalysisRunner:
                 task_id, AnalysisTaskStatus.FAILED, self._now(), error_summary="分析执行异常。"
             )
 
-    def _run_comparison(
-        self, repository: AnalysisRepository, task_id: int
-    ) -> AnalysisTaskStatus:
+    def _run_comparison(self, repository: AnalysisRepository, task_id: int) -> AnalysisTaskStatus:
         policies = repository.load_policy_details(task_id)
         if len(policies) < 2:
             repository.add_log(task_id, "warning", "政策比对任务少于两篇政策。")

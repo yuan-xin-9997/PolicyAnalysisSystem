@@ -84,9 +84,7 @@ def create_comparison_task(
             code="ANALYSIS_TOO_MANY_POLICIES",
             message="单次分析政策数量超出上限。",
         )
-    response = service.create_task(
-        body.policy_ids, requested_by=user.id, task_type="policy_comparison"
-    )
+    response = service.create_task(body.policy_ids, requested_by=user.id, task_type="policy_comparison")
     worker = getattr(request.app.state, "analysis_worker", None)
     if worker is not None and worker.can_run_tasks:
         worker.submit_next()

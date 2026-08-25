@@ -79,12 +79,12 @@ def build_comparison_report(
                     "shared_keywords": sorted(
                         shared, key=lambda word: (-(left_counter[word] + right_counter[word]), word)
                     )[:top_n],
-                    "left_only_keywords": sorted(
-                        left_only, key=lambda word: (-left_counter[word], word)
-                    )[:top_n],
-                    "right_only_keywords": sorted(
-                        right_only, key=lambda word: (-right_counter[word], word)
-                    )[:top_n],
+                    "left_only_keywords": sorted(left_only, key=lambda word: (-left_counter[word], word))[
+                        :top_n
+                    ],
+                    "right_only_keywords": sorted(right_only, key=lambda word: (-right_counter[word], word))[
+                        :top_n
+                    ],
                 }
             )
     similarities = [float(pair["similarity"]) for pair in pairs]
@@ -99,6 +99,7 @@ def build_comparison_report(
         "policies": analyzed,
         "pair_differences": pairs,
     }
+
 
 _stopwords_cache: frozenset[str] | None = None
 
