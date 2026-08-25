@@ -15,6 +15,8 @@ from policy_analysis.analysis.schemas import (
     AnalysisTaskSummary,
     CreateAnalysisTaskRequest,
     CreateAnalysisTaskResponse,
+    CreateComparisonTaskRequest,
+    PolicyComparisonReport,
     WordFrequencyResult,
     WordRelationResult,
 )
@@ -56,6 +58,35 @@ def create_task(
             message="单次分析政策数量超出上限。",
         )
     response = service.create_task(body.policy_ids, requested_by=user.id)
+    worker = getattr(request.app.state, "analysis_worker", None)
+    if worker is not None and worker.can_run_tasks:
+        worker.submit_next()
+    return response
+
+
+@router.post("/comparison-tasks", response_model=CreateAnalysisTaskResponse)
+def create_comparison_task(
+    request: Request,
+    body: CreateComparisonTaskRequest,
+    user: PublicUser = Depends(require_analysis_page_csrf),
+    service: AnalysisService = Depends(get_analysis_service),
+) -> CreateAnalysisTaskResponse:
+    unique_count = len(set(body.policy_ids))
+    if unique_count < 2:
+        raise APIError(
+            status_code=400,
+            code="COMPARISON_REQUIRES_TWO_POLICIES",
+            message="政策比对至少需要选择两篇不同的政策。",
+        )
+    if unique_count > request.app.state.settings.analysis.max_policies_per_task:
+        raise APIError(
+            status_code=400,
+            code="ANALYSIS_TOO_MANY_POLICIES",
+            message="单次分析政策数量超出上限。",
+        )
+    response = service.create_task(
+        body.policy_ids, requested_by=user.id, task_type="policy_comparison"
+    )
     worker = getattr(request.app.state, "analysis_worker", None)
     if worker is not None and worker.can_run_tasks:
         worker.submit_next()
@@ -106,6 +137,15 @@ def list_relations(
     service: AnalysisService = Depends(get_analysis_service),
 ) -> WordRelationResult:
     return service.list_relations(task_id, top=top)
+
+
+@router.get("/tasks/{task_id}/comparison-report", response_model=PolicyComparisonReport)
+def get_comparison_report(
+    task_id: PositiveIdPath,
+    _user: PublicUser = Depends(require_analysis_page),
+    service: AnalysisService = Depends(get_analysis_service),
+) -> PolicyComparisonReport:
+    return service.get_comparison_report(task_id)
 
 
 @router.get("/tasks/{task_id}/logs", response_model=AnalysisTaskLogPage)

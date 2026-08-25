@@ -318,4 +318,40 @@ describe('政策列表', () => {
     )
     await waitFor(() => expect(router.currentRoute.value.name).toBe('analysis'))
   })
+
+  it('选择两篇政策并创建政策比对任务', async () => {
+    const first = policyPage().items[0]
+    const page = policyPage({
+      items: [first, { ...first, id: 8, title: '人工智能安全治理规划', canonical_url: 'https://news.cn/example/d.html' }],
+      total: 2,
+    })
+    const fetchMock = vi.fn().mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/policies/filters')) return Promise.resolve(jsonResponse(filterOptions()))
+      if (url.includes('/policies')) return Promise.resolve(jsonResponse(page))
+      if (url.includes('/analysis/comparison-tasks')) return Promise.resolve(jsonResponse({ task_id: 52, status: 'pending' }))
+      return Promise.resolve(jsonResponse({}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/policies', name: 'policies', component: PolicyListView },
+        { path: '/policies/:policyId', name: 'policy-detail', component: PolicyDetailView },
+        { path: '/analysis', name: 'analysis', component: { template: '<div>analysis</div>' } },
+      ],
+    })
+    await router.push('/policies')
+    render(PolicyListView, { global: { plugins: [router] } })
+
+    await screen.findByText('人工智能安全治理规划')
+    expect(screen.getByRole('button', { name: '政策比对' })).toBeDisabled()
+    await fireEvent.click(screen.getByLabelText('选择 中共中央政治局召开会议'))
+    await fireEvent.click(screen.getByLabelText('选择 人工智能安全治理规划'))
+    await fireEvent.click(screen.getByRole('button', { name: /政策比对/ }))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/analysis/comparison-tasks'))).toBe(true),
+    )
+    await waitFor(() => expect(router.currentRoute.value.query.taskId).toBe('52'))
+  })
 })

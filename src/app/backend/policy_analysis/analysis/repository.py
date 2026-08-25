@@ -10,6 +10,9 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from policy_analysis.analysis.models import (
+    COMPARISON_VALUE,
+    WORD_VALUE,
+    AnalysisComparisonReport,
     AnalysisTask,
     AnalysisTaskLog,
     AnalysisTaskPolicy,
@@ -52,11 +55,16 @@ class AnalysisRepository:
         now: datetime,
         *,
         requested_by: int | None = None,
+        task_type: str = WORD_VALUE,
     ) -> AnalysisTask:
         _utc(now)
         unique_ids = list(dict.fromkeys(policy_ids))
         if not unique_ids:
             raise AnalysisRepositoryError("ANALYSIS_POLICY_IDS_EMPTY", "至少选择一篇政策。")
+        if task_type not in {WORD_VALUE, COMPARISON_VALUE}:
+            raise AnalysisRepositoryError("ANALYSIS_TASK_TYPE_INVALID", "分析任务类型无效。")
+        if task_type == COMPARISON_VALUE and len(unique_ids) < 2:
+            raise AnalysisRepositoryError("COMPARISON_REQUIRES_TWO_POLICIES", "政策比对至少需要两篇政策。")
         snapshot = json.dumps(
             {"policy_ids": unique_ids},
             ensure_ascii=False,
@@ -69,7 +77,7 @@ class AnalysisRepository:
             if missing:
                 raise AnalysisRepositoryError("POLICY_NOT_FOUND", "部分政策不存在。")
             task = AnalysisTask(
-                task_type="word_frequency",
+                task_type=task_type,
                 status=AnalysisTaskStatus.PENDING.value,
                 requested_by=requested_by,
                 policy_count=len(unique_ids),
@@ -146,6 +154,48 @@ class AnalysisRepository:
             return [
                 (policy_id, by_id[policy_id].content_text) for policy_id in policy_ids if policy_id in by_id
             ]
+
+    def load_policy_details(self, task_id: int) -> list[dict[str, object]]:
+        """Return policy metadata and content in the task selection order."""
+        with self._sessions() as session:
+            policy_ids = list(
+                session.scalars(
+                    select(AnalysisTaskPolicy.policy_id)
+                    .where(AnalysisTaskPolicy.task_id == task_id)
+                    .order_by(AnalysisTaskPolicy.id)
+                )
+            )
+            policies = list(session.scalars(select(Policy).where(Policy.id.in_(policy_ids))))
+            by_id = {policy.id: policy for policy in policies}
+            return [
+                {
+                    "id": policy_id,
+                    "title": by_id[policy_id].title,
+                    "publisher": by_id[policy_id].publisher,
+                    "published_at": by_id[policy_id].published_at,
+                    "content_text": by_id[policy_id].content_text,
+                }
+                for policy_id in policy_ids
+                if policy_id in by_id
+            ]
+
+    def store_comparison_report(self, task_id: int, report: Mapping[str, object], now: datetime) -> None:
+        _utc(now)
+        payload = json.dumps(
+            report,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value),
+        )
+        with self._sessions.begin() as session:
+            session.add(AnalysisComparisonReport(task_id=task_id, report_json=payload))
+
+    def get_comparison_report(self, task_id: int) -> dict[str, object] | None:
+        with self._sessions() as session:
+            report = session.scalar(
+                select(AnalysisComparisonReport).where(AnalysisComparisonReport.task_id == task_id)
+            )
+            return json.loads(report.report_json) if report is not None else None
 
     def store_results(
         self,

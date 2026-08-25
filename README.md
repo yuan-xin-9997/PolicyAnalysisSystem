@@ -133,10 +133,14 @@ npm --prefix src/app/frontend run test:e2e
 - 后台异步执行中文分词（jieba）、停用词过滤、词频统计、TF-IDF（以选中政策集合为语料）与关键词共现计算；
 - 任务完成后提供三个视图：词频排行（支持按频次/TF-IDF 排序）、词云（ECharts wordCloud）、关键词关系图（ECharts Graph 力导向）；
 - 页面内展示任务状态与历史分析任务列表，所有时间以北京时间显示。
+- 勾选至少两篇不同政策后，可点击「政策比对」异步生成差异分析报告；报告包含政策概览、共同关注点、核心关键词，以及全部两两组合的文本特征相似度、共同重点和各自独有重点；
+- 政策比对报告与任务一同持久化，可从历史分析任务中再次查看。
 
 相关 API：
 
 - `POST /api/v1/analysis/tasks`：创建分析任务，body `{ policy_ids: [...] }`，返回 `{ task_id, status }`（需 CSRF 与 analysis 页面权限）；
+- `POST /api/v1/analysis/comparison-tasks`：选择至少两篇不同政策创建差异比对任务；
+- `GET /api/v1/analysis/tasks/{task_id}/comparison-report`：查询已完成任务的结构化政策差异报告；
 - `GET /api/v1/analysis/tasks`：历史任务分页列表；
 - `GET /api/v1/analysis/tasks/{task_id}`：任务状态详情；
 - `GET /api/v1/analysis/tasks/{task_id}/words?top=50&sort_by=frequency|tfidf`：聚合词频结果；

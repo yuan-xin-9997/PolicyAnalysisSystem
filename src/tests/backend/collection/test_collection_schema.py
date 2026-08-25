@@ -679,7 +679,7 @@ def test_alembic_collection_schema_matches_orm_and_round_trips(tmp_path, monkeyp
         assert set(inspect(migration_engine).get_table_names()) >= AUTH_TABLES | COLLECTION_TABLES
         assert "schedules" not in set(inspect(migration_engine).get_table_names())
         with migration_engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0007"
             assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
         for table_name in COLLECTION_TABLES:
             assert _schema_signature(migration_engine, table_name) == _schema_signature(
@@ -702,7 +702,7 @@ def test_alembic_collection_schema_matches_orm_and_round_trips(tmp_path, monkeyp
         upgraded_again_engine = build_engine(migration_path)
         assert set(inspect(upgraded_again_engine).get_table_names()) >= AUTH_TABLES | COLLECTION_TABLES
         with upgraded_again_engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0007"
     finally:
         orm_engine.dispose()
         if migration_engine is not None:

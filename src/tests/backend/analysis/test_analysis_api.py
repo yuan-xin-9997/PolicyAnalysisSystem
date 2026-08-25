@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from policy_analysis.analysis.repository import AnalysisRepository
 from policy_analysis.analysis.runner import AnalysisRunner
 from policy_analysis.auth.models import PagePermission, User
+from policy_analysis.policies.models import Policy
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -86,6 +87,64 @@ def test_analysis_api_lists_history(admin_client: TestClient, auth_app, policy_i
     listed = admin_client.get("/api/v1/analysis/tasks")
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
+
+
+def test_comparison_api_generates_difference_report(
+    admin_client: TestClient,
+    auth_app,
+    database_sessions: sessionmaker[Session],
+    policy_id: int,
+) -> None:
+    with database_sessions.begin() as database:
+        original = database.get(Policy, policy_id)
+        assert original is not None
+        second = Policy(
+            source_id=original.source_id,
+            category_id=original.category_id,
+            title="人工智能安全治理规划",
+            canonical_url="https://www.news.cn/ai2.htm",
+            publisher="网信办",
+            published_at=NOW,
+            content_text="推动人工智能产业高质量发展，加强数据安全和算法治理。",
+            content_hash="b" * 64,
+            webfetch_artifact_id="art-2",
+            first_crawled_at=NOW,
+            last_crawled_at=NOW,
+        )
+        database.add(second)
+        database.flush()
+        second_id = second.id
+
+    auth_app.state.analysis_worker = FakeWorker()
+    created = admin_client.post(
+        "/api/v1/analysis/comparison-tasks",
+        json={"policy_ids": [policy_id, second_id]},
+        headers=csrf(admin_client),
+    )
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+    _run_task(database_sessions, task_id)
+
+    task = admin_client.get(f"/api/v1/analysis/tasks/{task_id}")
+    assert task.json()["task_type"] == "policy_comparison"
+    report = admin_client.get(f"/api/v1/analysis/tasks/{task_id}/comparison-report")
+    assert report.status_code == 200
+    assert report.json()["task_id"] == task_id
+    assert len(report.json()["policies"]) == 2
+    assert len(report.json()["pair_differences"]) == 1
+
+
+def test_comparison_api_requires_two_distinct_policies(
+    admin_client: TestClient, auth_app, policy_id: int
+) -> None:
+    auth_app.state.analysis_worker = FakeWorker()
+    response = admin_client.post(
+        "/api/v1/analysis/comparison-tasks",
+        json={"policy_ids": [policy_id, policy_id]},
+        headers=csrf(admin_client),
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "COMPARISON_REQUIRES_TWO_POLICIES"
 
 
 def test_analysis_api_permissions_and_csrf(

@@ -212,3 +212,28 @@ export interface AnalysisTaskLogPage {
   page: number
   page_size: number
 }
+
+export interface ComparisonPolicyItem {
+  id: number
+  title: string
+  publisher: string
+  published_at: string
+  top_keywords: string[]
+}
+
+export interface PolicyPairDifference {
+  left_policy_id: number
+  right_policy_id: number
+  similarity: number
+  shared_keywords: string[]
+  left_only_keywords: string[]
+  right_only_keywords: string[]
+}
+
+export interface PolicyComparisonReport {
+  task_id: number
+  summary: string
+  common_keywords: string[]
+  policies: ComparisonPolicyItem[]
+  pair_differences: PolicyPairDifference[]
+}

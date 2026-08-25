@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session, sessionmaker
 
 from policy_analysis.analysis import engine
-from policy_analysis.analysis.models import AnalysisTaskStatus
+from policy_analysis.analysis.models import COMPARISON_VALUE, AnalysisTaskStatus
 from policy_analysis.analysis.repository import AnalysisRepository, AnalysisRepositoryError
 
 _logger = logging.getLogger(__name__)
@@ -33,6 +33,11 @@ class AnalysisRunner:
     def run_claimed(self, task_id: int) -> AnalysisTaskStatus:
         repository = AnalysisRepository(self._sessions)
         try:
+            task = repository.get(task_id)
+            if task is None:
+                raise AnalysisRepositoryError("ANALYSIS_TASK_NOT_FOUND", "分析任务不存在。")
+            if task.task_type == COMPARISON_VALUE:
+                return self._run_comparison(repository, task_id)
             policies = repository.load_policies(task_id)
             if not policies:
                 repository.add_log(task_id, "warning", "任务未关联任何政策。")
@@ -75,6 +80,32 @@ class AnalysisRunner:
             return repository.finish(
                 task_id, AnalysisTaskStatus.FAILED, self._now(), error_summary="分析执行异常。"
             )
+
+    def _run_comparison(
+        self, repository: AnalysisRepository, task_id: int
+    ) -> AnalysisTaskStatus:
+        policies = repository.load_policy_details(task_id)
+        if len(policies) < 2:
+            repository.add_log(task_id, "warning", "政策比对任务少于两篇政策。")
+            return repository.finish(
+                task_id,
+                AnalysisTaskStatus.FAILED,
+                self._now(),
+                error_summary="政策比对至少需要两篇政策。",
+            )
+        repository.add_log(task_id, "info", "开始政策比对分析。", {"policy_count": len(policies)})
+        report = engine.build_comparison_report(
+            policies, min_word_length=self._min_word_length, top_n=self._top_words_default
+        )
+        report["task_id"] = task_id
+        repository.store_comparison_report(task_id, report, self._now())
+        repository.add_log(
+            task_id,
+            "info",
+            "政策比对分析完成。",
+            {"pair_count": len(report["pair_differences"])},
+        )
+        return repository.finish(task_id, AnalysisTaskStatus.SUCCEEDED, self._now())
 
     @staticmethod
     def _safe_log(

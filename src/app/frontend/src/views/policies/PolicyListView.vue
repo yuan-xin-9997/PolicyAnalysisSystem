@@ -70,6 +70,27 @@ async function startAnalysis(): Promise<void> {
   }
 }
 
+async function startComparison(): Promise<void> {
+  if (selectedIds.value.length < 2) {
+    submitError.value = '政策比对至少需要选择两篇政策。'
+    return
+  }
+  submitError.value = ''
+  submitting.value = true
+  try {
+    const result = await apiRequest<CreateAnalysisTaskResponse>('/analysis/comparison-tasks', {
+      method: 'POST',
+      body: JSON.stringify({ policy_ids: selectedIds.value }),
+    })
+    selectedIds.value = []
+    await router.push({ name: 'analysis', query: { taskId: String(result.task_id) } })
+  } catch (error) {
+    submitError.value = error instanceof ApiError ? error.message : '创建政策比对任务失败。'
+  } finally {
+    submitting.value = false
+  }
+}
+
 onMounted(() => {
   void Promise.all([loadFilterOptions(), loadPolicies()])
 })
@@ -247,6 +268,13 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
         @click="startAnalysis"
       >
         分词分析<template v-if="selectedIds.length > 0">（已选 {{ selectedIds.length }} 篇）</template>
+      </button>
+      <button
+        type="button"
+        :disabled="submitting || selectedIds.length < 2"
+        @click="startComparison"
+      >
+        政策比对<template v-if="selectedIds.length > 0">（已选 {{ selectedIds.length }} 篇）</template>
       </button>
       <span v-if="submitError" role="alert" class="filter-error">{{ submitError }}</span>
     </div>

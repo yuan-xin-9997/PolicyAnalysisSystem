@@ -4,6 +4,35 @@ import pytest
 from policy_analysis.analysis import engine
 
 
+def test_build_comparison_report_identifies_common_and_unique_keywords() -> None:
+    policies = [
+        {
+            "id": 1,
+            "title": "政策甲",
+            "publisher": "部门甲",
+            "published_at": "2026-08-01T00:00:00+00:00",
+            "content_text": "人工智能 产业发展 科技创新",
+        },
+        {
+            "id": 2,
+            "title": "政策乙",
+            "publisher": "部门乙",
+            "published_at": "2026-08-02T00:00:00+00:00",
+            "content_text": "人工智能 产业发展 数据安全",
+        },
+    ]
+
+    report = engine.build_comparison_report(policies)
+
+    assert len(report["policies"]) == 2
+    assert len(report["pair_differences"]) == 1
+    pair = report["pair_differences"][0]
+    assert "人工智能" in pair["shared_keywords"]
+    assert {"科技", "创新"} <= set(pair["left_only_keywords"])
+    assert "数据安全" in pair["right_only_keywords"]
+    assert 0 < pair["similarity"] < 1
+
+
 def test_tokenize_drops_punctuation_digits_and_short_tokens() -> None:
     words = engine.tokenize("推动人工智能产业，2024年。a b")
     assert "人工智能" in words

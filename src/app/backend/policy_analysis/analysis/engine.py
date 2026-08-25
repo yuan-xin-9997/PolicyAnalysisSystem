@@ -22,11 +22,83 @@ __all__ = [
     "analyze_text",
     "compute_cooccurrence",
     "compute_tfidf",
+    "build_comparison_report",
     "filter_stopwords",
     "load_stopwords",
     "tokenize",
     "top_words_from_totals",
 ]
+
+
+def _cosine_similarity(left: Counter[str], right: Counter[str]) -> float:
+    common = set(left) & set(right)
+    numerator = sum(left[word] * right[word] for word in common)
+    left_norm = math.sqrt(sum(value * value for value in left.values()))
+    right_norm = math.sqrt(sum(value * value for value in right.values()))
+    if not left_norm or not right_norm:
+        return 0.0
+    return numerator / (left_norm * right_norm)
+
+
+def build_comparison_report(
+    policies: Sequence[Mapping[str, object]], *, min_word_length: int = 2, top_n: int = 12
+) -> dict[str, object]:
+    """Build a deterministic, structured difference report for two or more policies."""
+    analyzed: list[dict[str, object]] = []
+    counters: list[Counter[str]] = []
+    for policy in policies:
+        words = analyze_text(str(policy["content_text"]), min_word_length=min_word_length)
+        counter = Counter(words)
+        counters.append(counter)
+        analyzed.append(
+            {
+                "id": int(policy["id"]),
+                "title": str(policy["title"]),
+                "publisher": str(policy["publisher"]),
+                "published_at": policy["published_at"],
+                "top_keywords": [word for word, _count in counter.most_common(top_n)],
+            }
+        )
+
+    keyword_sets = [set(counter) for counter in counters]
+    common = set.intersection(*keyword_sets) if keyword_sets else set()
+    common_ranked = sorted(common, key=lambda word: (-sum(c[word] for c in counters), word))[:top_n]
+    pairs: list[dict[str, object]] = []
+    for left_index in range(len(analyzed)):
+        for right_index in range(left_index + 1, len(analyzed)):
+            left_counter = counters[left_index]
+            right_counter = counters[right_index]
+            shared = set(left_counter) & set(right_counter)
+            left_only = set(left_counter) - set(right_counter)
+            right_only = set(right_counter) - set(left_counter)
+            pairs.append(
+                {
+                    "left_policy_id": analyzed[left_index]["id"],
+                    "right_policy_id": analyzed[right_index]["id"],
+                    "similarity": round(_cosine_similarity(left_counter, right_counter), 4),
+                    "shared_keywords": sorted(
+                        shared, key=lambda word: (-(left_counter[word] + right_counter[word]), word)
+                    )[:top_n],
+                    "left_only_keywords": sorted(
+                        left_only, key=lambda word: (-left_counter[word], word)
+                    )[:top_n],
+                    "right_only_keywords": sorted(
+                        right_only, key=lambda word: (-right_counter[word], word)
+                    )[:top_n],
+                }
+            )
+    similarities = [float(pair["similarity"]) for pair in pairs]
+    average = sum(similarities) / len(similarities) if similarities else 0.0
+    summary = (
+        f"本报告比对 {len(analyzed)} 篇政策，共识关键词 {len(common)} 个，"
+        f"两两文本特征平均相似度为 {average:.1%}。"
+    )
+    return {
+        "summary": summary,
+        "common_keywords": common_ranked,
+        "policies": analyzed,
+        "pair_differences": pairs,
+    }
 
 _stopwords_cache: frozenset[str] | None = None
 

@@ -20,6 +20,7 @@ from policy_analysis.auth.models import UTCDateTime, _utc_now
 from policy_analysis.core.database import Base
 
 WORD_VALUE = "word_frequency"
+COMPARISON_VALUE = "policy_comparison"
 
 
 class AnalysisTaskStatus(StrEnum):
@@ -33,7 +34,7 @@ class AnalysisTask(Base):
     __tablename__ = "analysis_tasks"
     __table_args__ = (
         CheckConstraint(
-            "task_type IN ('word_frequency')",
+            "task_type IN ('word_frequency', 'policy_comparison')",
             name="ck_analysis_tasks_task_type",
         ),
         CheckConstraint(
@@ -212,4 +213,21 @@ class AnalysisTaskLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     context_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now, nullable=False)
+
+
+class AnalysisComparisonReport(Base):
+    __tablename__ = "analysis_comparison_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "analysis_tasks.id",
+            ondelete="CASCADE",
+            name="fk_analysis_comparison_reports_task_id_analysis_tasks",
+        ),
+        unique=True,
+        nullable=False,
+    )
+    report_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now, nullable=False)

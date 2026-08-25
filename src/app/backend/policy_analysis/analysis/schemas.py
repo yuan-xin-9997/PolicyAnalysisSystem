@@ -25,6 +25,12 @@ class CreateAnalysisTaskRequest(StrictModel):
     )
 
 
+class CreateComparisonTaskRequest(StrictModel):
+    policy_ids: list[Annotated[int, Field(strict=True, ge=1)]] = Field(
+        min_length=2, max_length=MAX_POLICY_IDS
+    )
+
+
 class CreateAnalysisTaskResponse(StrictModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -103,6 +109,31 @@ class AnalysisTaskLogPage(StrictModel):
     total: int = Field(ge=0)
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)
+
+
+class ComparisonPolicyItem(StrictModel):
+    id: int = Field(ge=1)
+    title: str
+    publisher: str
+    published_at: str
+    top_keywords: list[str]
+
+
+class PolicyPairDifference(StrictModel):
+    left_policy_id: int = Field(ge=1)
+    right_policy_id: int = Field(ge=1)
+    similarity: float = Field(ge=0, le=1)
+    shared_keywords: list[str]
+    left_only_keywords: list[str]
+    right_only_keywords: list[str]
+
+
+class PolicyComparisonReport(StrictModel):
+    task_id: int = Field(ge=1)
+    summary: str
+    common_keywords: list[str]
+    policies: list[ComparisonPolicyItem]
+    pair_differences: list[PolicyPairDifference]
 
 
 BoundedWord = Annotated[str, StringConstraints(min_length=1, max_length=128)]

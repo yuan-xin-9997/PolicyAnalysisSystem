@@ -209,7 +209,7 @@ def test_default_first_startup_migrates_to_head_and_supports_long_chinese_search
         assert response.status_code == 200
         assert [item["id"] for item in response.json()["items"]] == [policy_id]
         with app.state.database_sessions() as database:
-            assert database.execute(select_version()).scalar_one() == "0006"
+            assert database.execute(select_version()).scalar_one() == "0007"
 
     assert database_path.is_file()
     assert not unrelated_database.exists()
@@ -322,7 +322,7 @@ def test_runtime_migration_serializes_concurrent_upgrades_of_same_database(tmp_p
     engine = build_engine(database_path)
     try:
         with engine.connect() as connection:
-            assert connection.execute(select_version()).scalar_one() == "0006"
+            assert connection.execute(select_version()).scalar_one() == "0007"
     finally:
         engine.dispose()
 
@@ -379,7 +379,7 @@ def test_default_startup_upgrades_existing_0002_and_rebuilds_policy_fts(
         assert response.status_code == 200
         assert [item["id"] for item in response.json()["items"]] == [policy_id]
         with app.state.database_sessions() as database:
-            assert database.execute(select_version()).scalar_one() == "0006"
+            assert database.execute(select_version()).scalar_one() == "0007"
 
 
 def test_default_startup_stops_on_sanitized_migration_failure(

@@ -6,6 +6,7 @@ import type {
   AnalysisTaskLogPage,
   AnalysisTaskPage,
   AnalysisTaskSummary,
+  PolicyComparisonReport,
   WordFrequencyResult,
   WordRelationResult,
 } from '../../api/types'
@@ -23,6 +24,7 @@ const task = ref<AnalysisTaskSummary | null>(null)
 const words = ref<WordFrequencyResult | null>(null)
 const relations = ref<WordRelationResult | null>(null)
 const logs = ref<AnalysisTaskLogPage | null>(null)
+const comparison = ref<PolicyComparisonReport | null>(null)
 const history = ref<AnalysisTaskSummary[]>([])
 const loadError = ref('')
 let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -51,6 +53,13 @@ async function loadTask(): Promise<void> {
 async function loadResults(): Promise<void> {
   if (taskId.value === null || task.value?.status !== 'succeeded') return
   try {
+    if (task.value.task_type === 'policy_comparison') {
+      comparison.value = await apiRequest<PolicyComparisonReport>(
+        `/analysis/tasks/${taskId.value}/comparison-report`,
+      )
+      logs.value = await apiRequest<AnalysisTaskLogPage>(`/analysis/tasks/${taskId.value}/logs`)
+      return
+    }
     words.value = await apiRequest<WordFrequencyResult>(
       `/analysis/tasks/${taskId.value}/words?top=50`,
     )
@@ -118,6 +127,7 @@ watch(taskId, () => {
   task.value = null
   words.value = null
   relations.value = null
+  comparison.value = null
   logs.value = null
   loadError.value = ''
   void initialize()
@@ -138,6 +148,14 @@ function statusText(status: string): string {
     failed: '失败',
   }
   return map[status] ?? status
+}
+
+function taskTypeText(taskType: string): string {
+  return taskType === 'policy_comparison' ? '政策比对' : '分词分析'
+}
+
+function policyTitle(id: number): string {
+  return comparison.value?.policies.find((item) => item.id === id)?.title ?? `政策 #${id}`
 }
 
 async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
@@ -162,6 +180,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
     <div v-if="task" class="analysis-task">
       <h2>任务 #{{ task.id }}</h2>
       <dl class="task-meta">
+        <dt>分析类型</dt>
+        <dd>{{ taskTypeText(task.task_type) }}</dd>
         <dt>状态</dt>
         <dd>{{ statusText(task.status) }}</dd>
         <dt>政策数</dt>
@@ -240,6 +260,42 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
           <p v-else class="state-card">无关系数据</p>
         </div>
       </div>
+
+      <article v-if="task.status === 'succeeded' && comparison" class="comparison-report">
+        <h2>政策差异分析报告</h2>
+        <p class="state-card">{{ comparison.summary }}</p>
+
+        <section>
+          <h3>政策概览</h3>
+          <table class="data-table">
+            <thead><tr><th>政策</th><th>发布部门</th><th>发布时间</th><th>核心关键词</th></tr></thead>
+            <tbody>
+              <tr v-for="policy in comparison.policies" :key="policy.id">
+                <td>{{ policy.title }}</td>
+                <td>{{ policy.publisher }}</td>
+                <td>{{ formatBeijingTime(policy.published_at) }}</td>
+                <td>{{ policy.top_keywords.join('、') || '无' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h3>共同关注点</h3>
+          <p>{{ comparison.common_keywords.join('、') || '未发现全部政策共同出现的显著关键词。' }}</p>
+        </section>
+
+        <section>
+          <h3>两两差异</h3>
+          <div v-for="pair in comparison.pair_differences" :key="`${pair.left_policy_id}-${pair.right_policy_id}`" class="state-card">
+            <h4>{{ policyTitle(pair.left_policy_id) }} vs {{ policyTitle(pair.right_policy_id) }}</h4>
+            <p>文本特征相似度：{{ (pair.similarity * 100).toFixed(1) }}%</p>
+            <p><strong>共同重点：</strong>{{ pair.shared_keywords.join('、') || '无' }}</p>
+            <p><strong>前者独有重点：</strong>{{ pair.left_only_keywords.join('、') || '无' }}</p>
+            <p><strong>后者独有重点：</strong>{{ pair.right_only_keywords.join('、') || '无' }}</p>
+          </div>
+        </section>
+      </article>
     </div>
 
     <div class="analysis-history">
@@ -248,6 +304,7 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
         <thead>
           <tr>
             <th>任务</th>
+            <th>类型</th>
             <th>状态</th>
             <th>政策数</th>
             <th>创建时间</th>
@@ -258,6 +315,7 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
             <td>
               <button class="link-button" @click="selectHistory(item.id)">#{{ item.id }}</button>
             </td>
+            <td>{{ taskTypeText(item.task_type) }}</td>
             <td>{{ statusText(item.status) }}</td>
             <td>{{ item.policy_count }}</td>
             <td>{{ formatBeijingTime(item.created_at) }}</td>

@@ -16,6 +16,7 @@ from policy_analysis.analysis.schemas import (
     AnalysisTaskPage,
     AnalysisTaskSummary,
     CreateAnalysisTaskResponse,
+    PolicyComparisonReport,
     WordFrequencyItem,
     WordFrequencyResult,
     WordRelationItem,
@@ -38,14 +39,33 @@ class AnalysisService:
     def repository(self) -> AnalysisRepository:
         return AnalysisRepository(self._sessions)
 
-    def create_task(self, policy_ids: list[int], *, requested_by: int | None) -> CreateAnalysisTaskResponse:
+    def create_task(
+        self, policy_ids: list[int], *, requested_by: int | None, task_type: str = "word_frequency"
+    ) -> CreateAnalysisTaskResponse:
         try:
-            task = self.repository.create_task(policy_ids, self._now(), requested_by=requested_by)
+            task = self.repository.create_task(
+                policy_ids, self._now(), requested_by=requested_by, task_type=task_type
+            )
         except AnalysisRepositoryError as error:
             if error.code == "POLICY_NOT_FOUND":
                 raise APIError(status_code=404, code="POLICY_NOT_FOUND", message="部分政策不存在。") from None
             raise APIError(status_code=400, code=error.code, message=str(error)) from None
         return CreateAnalysisTaskResponse(task_id=task.id, status=task.status)
+
+    def get_comparison_report(self, task_id: int) -> PolicyComparisonReport:
+        task = self.repository.get(task_id)
+        if task is None:
+            raise APIError(status_code=404, code="ANALYSIS_TASK_NOT_FOUND", message="分析任务不存在。")
+        if task.task_type != "policy_comparison":
+            raise APIError(status_code=400, code="NOT_COMPARISON_TASK", message="该任务不是政策比对任务。")
+        report = self.repository.get_comparison_report(task_id)
+        if report is None:
+            raise APIError(
+                status_code=409,
+                code="COMPARISON_REPORT_NOT_READY",
+                message="政策比对报告尚未生成。",
+            )
+        return PolicyComparisonReport.model_validate(report)
 
     def get_task(self, task_id: int) -> AnalysisTaskSummary:
         task = self.repository.get(task_id)
