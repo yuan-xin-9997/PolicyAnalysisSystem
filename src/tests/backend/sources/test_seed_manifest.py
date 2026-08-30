@@ -57,17 +57,17 @@ def test_default_seed_manifest_has_verified_five_year_inventory() -> None:
     entries = load_seed_manifest()
 
     assert isinstance(entries, tuple)
-    assert len(entries) == 51
+    assert len(entries) == 52
     assert Counter(entry.expected_published_date.year for entry in entries) == {
         2021: 4,
         2022: 9,
         2023: 10,
         2024: 11,
         2025: 11,
-        2026: 6,
+        2026: 7,
     }
     assert entries[0].expected_published_date.isoformat() == "2021-08-31"
-    assert entries[-1].expected_published_date.isoformat() == "2026-07-30"
+    assert entries[-1].expected_published_date.isoformat() == "2026-08-28"
     assert (
         sum(
             entry.expected_published_date.year == 2025 and entry.expected_published_date.month == 12
@@ -274,8 +274,8 @@ def test_manifest_import_is_idempotent_and_upgrade_preserves_site_data(
 
     first = import_seed_manifest(service, rule_id)
     second = import_seed_manifest(service, rule_id)
-    assert (first.inserted, first.existing) == (51, 0)
-    assert (second.inserted, second.existing) == (0, 51)
+    assert (first.inserted, first.existing) == (52, 0)
+    assert (second.inserted, second.existing) == (0, 52)
 
     original_url = load_seed_manifest()[0].url
     site_url = "https://www.news.cn/site-added/c.html"
@@ -301,18 +301,18 @@ def test_manifest_import_is_idempotent_and_upgrade_preserves_site_data(
     upgraded[0]["expected_title"] = "中共中央政治局召开会议 资源升级标题"
     upgraded.append(
         manifest_entry(
-            url="https://www.news.cn/20260731/00000000000000000000000000000000/c.html",
-            expected_published_date="2026-07-31",
+            url="https://www.news.cn/20260831/00000000000000000000000000000000/c.html",
+            expected_published_date="2026-08-31",
         )
     )
     upgraded_path = write_manifest(tmp_path / "upgraded.json", upgraded)
 
     result = import_seed_manifest(service, rule_id, upgraded_path)
-    assert (result.inserted, result.existing) == (1, 51)
+    assert (result.inserted, result.existing) == (1, 52)
 
     with database_sessions() as database:
         rows = list(database.scalars(select(SeedUrl).where(SeedUrl.rule_id == rule_id)))
-        assert len(rows) == 53
+        assert len(rows) == 54
         assert {row.url for row in rows}.issuperset({original_url, site_url})
         preserved = next(row for row in rows if row.url == original_url)
         assert preserved.expected_title == "现场人工标题"

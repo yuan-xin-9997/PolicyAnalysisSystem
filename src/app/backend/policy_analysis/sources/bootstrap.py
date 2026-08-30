@@ -102,7 +102,7 @@ POLITBURO_SPEC = ScenarioSpec(
     include_keywords=("中共中央政治局召开会议",),
     history_years=5,
     earliest_date=date(2021, 8, 1),
-    latest_date=date(2026, 8, 1),
+    latest_date=date(2026, 8, 31),
     title_must_contain=("中共中央政治局召开会议",),
 )
 
