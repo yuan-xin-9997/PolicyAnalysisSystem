@@ -1,308 +1,314 @@
 [
-  {
-    "url": "https://www.news.cn/politics/leaders/2021-08/31/c_1127814128.htm",
-    "expected_title": "中共中央政治局召开会议 决定召开十九届六中全会 审议《关于十九届中央第七轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2021-08-31",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/2021-10/18/c_1127969449.htm",
-    "expected_title": "中共中央政治局召开会议 讨论拟提请十九届六中全会审议的文件 中共中央总书记习近平主持会议",
-    "expected_published_date": "2021-10-18",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2021-11/18/c_1128077610.htm",
-    "expected_title": "中共中央政治局召开会议 审议《国家安全战略（2021－2025年）》《军队功勋荣誉表彰条例》和《国家科技咨询委员会2021年咨询报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2021-11-18",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2021-12/06/c_1128136747.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究2022年经济工作 研究部署党风廉政建设和反腐败工作 审议《中国共产党纪律检查委员会工作条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2021-12-06",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2022-01/24/c_1128296277.htm",
-    "expected_title": "中共中央政治局召开会议 审议《中央政治局常委会听取和研究全国人大常委会、国务院、全国政协、最高人民法院、最高人民检察院党组工作汇报和中央书记处工作报告的综合情况报告》《信访工作条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-01-24",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.xinhuanet.com/2022-02/25/c_1128416447.htm",
-    "expected_title": "中共中央政治局召开会议 讨论政府工作报告 审议《关于十九届中央第八轮巡视情况的综合报告》《关于2021年中央巡视工作领导小组重点工作情况的报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-02-25",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2022-04/29/c_1128608127.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《国家“十四五”期间人才发展规划》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-04-29",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/2022-05/27/c_1128689320.htm",
-    "expected_title": "中共中央政治局召开会议 审议《中国共产党政治协商工作条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-05-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2022-06/17/c_1128750503.htm",
-    "expected_title": "中共中央政治局召开会议 审议《关于十九届中央第八轮巡视金融单位整改进展情况的报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-06-17",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2022-07/28/c_1128871681.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《关于十九届中央第九轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-07-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2022-09/09/c_1128990164.htm",
-    "expected_title": "中共中央政治局召开会议 研究拟提请党的十九届七中全会讨论的文件 审议《十九届中央政治局贯彻执行中央八项规定情况报告》《关于党的十九大以来整治形式主义为基层减负工作情况的报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2022-09-09",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.xinhuanet.com/politics/2022-10/25/c_1129079153.htm",
-    "expected_title": "中共中央政治局召开会议 习近平主持会议",
-    "expected_published_date": "2022-10-25",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.xinhuanet.com/politics/2022-12/07/c_1129188720.htm",
-    "expected_title": "中共中央政治局召开会议 习近平主持会议",
-    "expected_published_date": "2022-12-07",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-02/21/c_1129383755.htm",
-    "expected_title": "中共中央政治局召开会议 决定召开二十届二中全会 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-02-21",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-03/30/c_1129479101.htm",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-03-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-04/28/c_1129576764.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-04-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-06/30/c_1129725647.htm",
-    "expected_title": "中共中央政治局召开会议 审议《关于支持高标准高质量建设雄安新区若干政策措施的意见》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-06-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-07/24/c_1129765310.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-07-24",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-08/31/c_1129838612.htm",
-    "expected_title": "中共中央政治局召开会议 审议《干部教育培训工作条例》《全国干部教育培训规划（2023－2027年）》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-08-31",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-09/27/c_1129889362.htm",
-    "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第一轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-09-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-10/27/c_1129943533.htm",
-    "expected_title": "中共中央政治局召开会议 审议《关于进一步推动新时代东北全面振兴取得新突破若干政策措施的意见》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-10-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-11/27/c_1129995316.htm",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-11-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/2023-12/08/c_1130015316.htm",
-    "expected_title": "中共中央政治局召开会议 分析研究2024年经济工作 研究部署党风廉政建设和反腐败工作 审议《中国共产党纪律处分条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2023-12-08",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20240131/799a5c88c4ef4a2f8b8ed013e20e8939/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-01-31",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240229/3e99d431b22846f9a45716bc4d477872/c.html",
-    "expected_title": "中共中央政治局召开会议 讨论政府工作报告 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-02-29",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240329/6ba7ff0d19ad4520b4902c91e259ab58/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第二轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-03-29",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20240430/fc8a2aa200ef47bead7670752e14ebe5/c.html",
-    "expected_title": "中共中央政治局召开会议 决定召开二十届三中全会 分析研究当前经济形势和经济工作 审议《关于持续深入推进长三角一体化高质量发展若干政策措施的意见》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-04-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240527/3bcff5ad99994e7d84defbb3b99d30f0/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《新时代推动中部地区加快崛起的若干政策措施》《防范化解金融风险问责规定（试行）》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-05-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20240627/ad3544b9bed249acb9596c1f64e20d74/c.html",
-    "expected_title": "中共中央政治局召开会议 讨论拟提请二十届三中全会审议的文件 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-06-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240730/4c72f3d27e54447f9793c20d1d577ec2/c.html",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《整治形式主义为基层减负若干规定》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-07-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240823/0ac1a936d98f4eaaa1df2c2f3965df36/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《进一步推动西部大开发形成新格局的若干政策措施》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-08-23",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20240926/d20b90ff7b704f7a8638d697d85ae621/c.html",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-09-26",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20241028/0837ebd11fc74e34a090d4e3ab6e9047/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第三轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-10-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/20241209/5ca37442920f412a9a0729fa3ae1aa82/c.html",
-    "expected_title": "中共中央政治局召开会议 分析研究2025年经济工作 研究部署党风廉政建设和反腐败工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2024-12-09",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20250120/594609adff1a4ac99da8b5aa00a21309/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-01-20",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20250228/320e305d52fe405090dd368f9003950d/c.html",
-    "expected_title": "中共中央政治局召开会议 讨论政府工作报告 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-02-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20250331/3011737b5bbd402b8756186f386b7c9d/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-03-31",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20250425/1d4e15c97aea42daa29cd95380c0fe13/c.html",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-04-25",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20250630/acf4b382290f46e3b8f73b13cdbeaa54/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《党中央决策议事协调机构工作条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-06-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20250730/fdecc6fc02094666a4c8205f4072c1e9/c.html",
-    "expected_title": "中共中央政治局召开会议 决定召开二十届四中全会 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-07-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20250829/e4a2c7e258bb4eb797ea3e2daf25298b/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-08-29",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/20250929/998b9d6297da4b93b01f12f312462135/c.html",
-    "expected_title": "中共中央政治局召开会议 讨论拟提请二十届四中全会审议的文件 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-09-29",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20251128/b7a6260eb3044f58a5ac9338e22a2683/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《关于二十届中央巡视省（自治区、直辖市）情况的综合报告》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-11-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/20251208/6d2165f3372d4a4caec066c80bda14b6/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-12-08",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20251225/2d39da6f7e2c4d97bc9fd8ad6d5686ba/c.html",
-    "expected_title": "中共中央政治局召开会议 研究部署党风廉政建设和反腐败工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2025-12-25",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20260130/fea7ce16a21f43b0a5e55cede157834e/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-01-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20260227/a8b27b1b8c7442be9678ff6e530cdd18/c.html",
-    "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-02-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20260327/97f15fe1fa32489b95366b88f9556db5/c.html",
-    "expected_title": "中共中央政治局召开会议 审议《中国共产党地方委员会工作条例》 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-03-27",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20260428/002222d43f9e47d2947142a92e84a026/c.html",
-    "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-04-28",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/politics/leaders/20260630/5661adcaa1dc41c78ba57e83a3cdd43b/c.html",
-    "expected_title": "中共中央政治局召开会议 研究部署防汛抗旱工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-06-30",
-    "is_verified": true
-  },
-  {
-    "url": "https://www.news.cn/20260730/13ecbfd4cd9b455281a0649232b98ad0/c.html",
-    "expected_title": "中共中央政治局召开会议 决定召开二十届五中全会 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
-    "expected_published_date": "2026-07-30",
-    "is_verified": true
-  }
+ {
+  "url": "https://www.news.cn/politics/leaders/2021-08/31/c_1127814128.htm",
+  "expected_title": "中共中央政治局召开会议 决定召开十九届六中全会 审议《关于十九届中央第七轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2021-08-31",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/2021-10/18/c_1127969449.htm",
+  "expected_title": "中共中央政治局召开会议 讨论拟提请十九届六中全会审议的文件 中共中央总书记习近平主持会议",
+  "expected_published_date": "2021-10-18",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2021-11/18/c_1128077610.htm",
+  "expected_title": "中共中央政治局召开会议 审议《国家安全战略（2021－2025年）》《军队功勋荣誉表彰条例》和《国家科技咨询委员会2021年咨询报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2021-11-18",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2021-12/06/c_1128136747.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究2022年经济工作 研究部署党风廉政建设和反腐败工作 审议《中国共产党纪律检查委员会工作条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2021-12-06",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2022-01/24/c_1128296277.htm",
+  "expected_title": "中共中央政治局召开会议 审议《中央政治局常委会听取和研究全国人大常委会、国务院、全国政协、最高人民法院、最高人民检察院党组工作汇报和中央书记处工作报告的综合情况报告》《信访工作条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-01-24",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.xinhuanet.com/2022-02/25/c_1128416447.htm",
+  "expected_title": "中共中央政治局召开会议 讨论政府工作报告 审议《关于十九届中央第八轮巡视情况的综合报告》《关于2021年中央巡视工作领导小组重点工作情况的报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-02-25",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2022-04/29/c_1128608127.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《国家“十四五”期间人才发展规划》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-04-29",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/2022-05/27/c_1128689320.htm",
+  "expected_title": "中共中央政治局召开会议 审议《中国共产党政治协商工作条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-05-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2022-06/17/c_1128750503.htm",
+  "expected_title": "中共中央政治局召开会议 审议《关于十九届中央第八轮巡视金融单位整改进展情况的报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-06-17",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2022-07/28/c_1128871681.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《关于十九届中央第九轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-07-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2022-09/09/c_1128990164.htm",
+  "expected_title": "中共中央政治局召开会议 研究拟提请党的十九届七中全会讨论的文件 审议《十九届中央政治局贯彻执行中央八项规定情况报告》《关于党的十九大以来整治形式主义为基层减负工作情况的报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2022-09-09",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.xinhuanet.com/politics/2022-10/25/c_1129079153.htm",
+  "expected_title": "中共中央政治局召开会议 习近平主持会议",
+  "expected_published_date": "2022-10-25",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.xinhuanet.com/politics/2022-12/07/c_1129188720.htm",
+  "expected_title": "中共中央政治局召开会议 习近平主持会议",
+  "expected_published_date": "2022-12-07",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-02/21/c_1129383755.htm",
+  "expected_title": "中共中央政治局召开会议 决定召开二十届二中全会 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-02-21",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-03/30/c_1129479101.htm",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-03-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-04/28/c_1129576764.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-04-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-06/30/c_1129725647.htm",
+  "expected_title": "中共中央政治局召开会议 审议《关于支持高标准高质量建设雄安新区若干政策措施的意见》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-06-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-07/24/c_1129765310.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-07-24",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-08/31/c_1129838612.htm",
+  "expected_title": "中共中央政治局召开会议 审议《干部教育培训工作条例》《全国干部教育培训规划（2023－2027年）》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-08-31",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-09/27/c_1129889362.htm",
+  "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第一轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-09-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-10/27/c_1129943533.htm",
+  "expected_title": "中共中央政治局召开会议 审议《关于进一步推动新时代东北全面振兴取得新突破若干政策措施的意见》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-10-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-11/27/c_1129995316.htm",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-11-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/2023-12/08/c_1130015316.htm",
+  "expected_title": "中共中央政治局召开会议 分析研究2024年经济工作 研究部署党风廉政建设和反腐败工作 审议《中国共产党纪律处分条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2023-12-08",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20240131/799a5c88c4ef4a2f8b8ed013e20e8939/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-01-31",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240229/3e99d431b22846f9a45716bc4d477872/c.html",
+  "expected_title": "中共中央政治局召开会议 讨论政府工作报告 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-02-29",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240329/6ba7ff0d19ad4520b4902c91e259ab58/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第二轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-03-29",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20240430/fc8a2aa200ef47bead7670752e14ebe5/c.html",
+  "expected_title": "中共中央政治局召开会议 决定召开二十届三中全会 分析研究当前经济形势和经济工作 审议《关于持续深入推进长三角一体化高质量发展若干政策措施的意见》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-04-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240527/3bcff5ad99994e7d84defbb3b99d30f0/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《新时代推动中部地区加快崛起的若干政策措施》《防范化解金融风险问责规定（试行）》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-05-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20240627/ad3544b9bed249acb9596c1f64e20d74/c.html",
+  "expected_title": "中共中央政治局召开会议 讨论拟提请二十届三中全会审议的文件 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-06-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240730/4c72f3d27e54447f9793c20d1d577ec2/c.html",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 审议《整治形式主义为基层减负若干规定》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-07-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240823/0ac1a936d98f4eaaa1df2c2f3965df36/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《进一步推动西部大开发形成新格局的若干政策措施》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-08-23",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20240926/d20b90ff7b704f7a8638d697d85ae621/c.html",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-09-26",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20241028/0837ebd11fc74e34a090d4e3ab6e9047/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《关于二十届中央第三轮巡视情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-10-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/20241209/5ca37442920f412a9a0729fa3ae1aa82/c.html",
+  "expected_title": "中共中央政治局召开会议 分析研究2025年经济工作 研究部署党风廉政建设和反腐败工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2024-12-09",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20250120/594609adff1a4ac99da8b5aa00a21309/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-01-20",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20250228/320e305d52fe405090dd368f9003950d/c.html",
+  "expected_title": "中共中央政治局召开会议 讨论政府工作报告 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-02-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20250331/3011737b5bbd402b8756186f386b7c9d/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-03-31",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20250425/1d4e15c97aea42daa29cd95380c0fe13/c.html",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-04-25",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20250630/acf4b382290f46e3b8f73b13cdbeaa54/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《党中央决策议事协调机构工作条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-06-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20250730/fdecc6fc02094666a4c8205f4072c1e9/c.html",
+  "expected_title": "中共中央政治局召开会议 决定召开二十届四中全会 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-07-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20250829/e4a2c7e258bb4eb797ea3e2daf25298b/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-08-29",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/20250929/998b9d6297da4b93b01f12f312462135/c.html",
+  "expected_title": "中共中央政治局召开会议 讨论拟提请二十届四中全会审议的文件 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-09-29",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20251128/b7a6260eb3044f58a5ac9338e22a2683/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《关于二十届中央巡视省（自治区、直辖市）情况的综合报告》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-11-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/20251208/6d2165f3372d4a4caec066c80bda14b6/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-12-08",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20251225/2d39da6f7e2c4d97bc9fd8ad6d5686ba/c.html",
+  "expected_title": "中共中央政治局召开会议 研究部署党风廉政建设和反腐败工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2025-12-25",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20260130/fea7ce16a21f43b0a5e55cede157834e/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-01-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20260227/a8b27b1b8c7442be9678ff6e530cdd18/c.html",
+  "expected_title": "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-02-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20260327/97f15fe1fa32489b95366b88f9556db5/c.html",
+  "expected_title": "中共中央政治局召开会议 审议《中国共产党地方委员会工作条例》 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-03-27",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20260428/002222d43f9e47d2947142a92e84a026/c.html",
+  "expected_title": "中共中央政治局召开会议 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-04-28",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20260630/5661adcaa1dc41c78ba57e83a3cdd43b/c.html",
+  "expected_title": "中共中央政治局召开会议 研究部署防汛抗旱工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-06-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/20260730/13ecbfd4cd9b455281a0649232b98ad0/c.html",
+  "expected_title": "中共中央政治局召开会议 决定召开二十届五中全会 分析研究当前经济形势和经济工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-07-30",
+  "is_verified": true
+ },
+ {
+  "url": "https://www.news.cn/politics/leaders/20260828/8d075ee55f0948278604a1a8dcef7ebe/c.html",
+  "expected_title": "中共中央政治局召开会议 研究部署西藏日喀则市吉隆县泥石流灾害抢险救援工作 中共中央总书记习近平主持会议",
+  "expected_published_date": "2026-08-28",
+  "is_verified": true
+ }
 ]
