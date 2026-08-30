@@ -764,3 +764,24 @@ def test_paragraph_body_excludes_header_and_strips_residual_footer() -> None:
 
 def test_paragraph_body_returns_empty_when_no_p_blocks() -> None:
     assert _collector().paragraph_body("<html><body>无段落正文</body></html>") == ""
+
+
+@pytest.mark.parametrize(
+    ("raw_title", "expected"),
+    [
+        ("中共中央政治局召开会议-新华网", "中共中央政治局召开会议"),
+        ("中共中央政治局召开会议_新华网", "中共中央政治局召开会议"),
+        ("中共中央政治局召开会议--人民网", "中共中央政治局召开会议"),
+        ("中共中央政治局召开会议_央视网", "中共中央政治局召开会议"),
+        ("中共中央政治局召开会议", "中共中央政治局召开会议"),
+        ("中美经贸磋商-联合声明", "中美经贸磋商-联合声明"),
+    ],
+)
+def test_classify_strips_official_site_suffix_from_extracted_title(raw_title: str, expected: str) -> None:
+    result = _collector().classify(
+        CURRENT_ARTICLE_URL,
+        _article(title=raw_title),
+        datetime(2021, 7, 31, tzinfo=UTC),
+    )
+
+    assert result.title == expected

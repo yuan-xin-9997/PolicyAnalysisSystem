@@ -189,7 +189,8 @@ class XinhuaCollector:
         host = normalized_http_hostname(canonical)
         published_at = self._published_at(article, canonical)
         cutoff_at = _as_beijing(cutoff)
-        normalized_title = _collapsed(article.title)
+        title = _strip_site_suffix(article.title)
+        normalized_title = _collapsed(title)
         normalized_content = _collapsed(article.content)
         lead = normalized_content[:_LEAD_LIMIT]
         publisher = _publisher(article.author, normalized_content)
@@ -221,7 +222,7 @@ class XinhuaCollector:
             accepted=reason == "ACCEPTED",
             reason_code=reason,
             canonical_url=canonical,
-            title=article.title,
+            title=title,
             content=_clean_content(article.content),
             publisher=publisher,
             published_at=published_at,
@@ -329,6 +330,23 @@ def _normalized_keywords(values: Any, *, require_nonempty: bool) -> tuple[str, .
 
 def _collapsed(value: str) -> str:
     return " ".join(value.split())
+
+
+_SITE_TITLE_SUFFIX = re.compile(
+    r"\s*[-–—_|｜]{1,2}\s*"
+    r"(?:新华网|新华通讯社|人民网|央视网|中国网络电视台|央视国际|中国经济网|光明网|求是网|中国政府网)"
+    r"\s*$"
+)
+
+
+def _strip_site_suffix(title: str) -> str:
+    """剥离提取标题末尾的站点名装饰。
+
+    网页 ``<title>`` 常带“标题-新华网”之类的站点后缀，而已核验种子
+    （seed_urls.expected_title）保存的是纯标题，精确比对前必须先剥离。
+    只剥离已知官方站点名单，避免截断真实标题中的分隔符。
+    """
+    return _SITE_TITLE_SUFFIX.sub("", title, count=1).strip()
 
 
 def _clean_content(content: str) -> str:
