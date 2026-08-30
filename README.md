@@ -158,6 +158,8 @@ export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://your-webfetch-service'
 export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
 ```
 
+采集规则的 `discovery` 配置支持为栏目入口选择抓取策略：`channel_fetch_mode` 取值 `auto`/`http`/`browser`（默认 `auto`，保持原有行为）。对列表由 JS 动态加载的栏目页（如新华网时政要闻页），可将其设为 `browser`，采集器会通过 WebFetch 的浏览器渲染模式等待页面加载完成后再解析文章链接；渲染失败时自动回退 HTTP 抓取静态骨架。旧任务快照不含该字段时按默认值处理。
+
 管理员登录后，在任务中心相关 API 中维护来源与采集规则。每条采集规则自带触发方式（`trigger_mode`）：
 
 - **手工触发（manual）**：仅在任务中心手工创建采集任务，系统不会自动运行；
