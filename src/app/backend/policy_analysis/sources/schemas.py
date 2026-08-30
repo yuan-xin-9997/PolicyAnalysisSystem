@@ -45,6 +45,7 @@ ValidatedHttpUrlText = Annotated[HttpUrlText, AfterValidator(_validate_http_url)
 class DiscoveryConfig(StrictModel):
     rss_urls: list[ValidatedHttpUrlText] = Field(default_factory=list, max_length=32)
     channel_urls: list[ValidatedHttpUrlText] = Field(default_factory=list, max_length=32)
+    channel_fetch_mode: Literal["auto", "http", "browser"] = "auto"
 
     @field_validator("rss_urls", "channel_urls")
     @classmethod

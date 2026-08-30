@@ -33,11 +33,13 @@ class FakeWebFetch:
         self.sessions = sessions
         self.articles = articles
         self.calls: list[str] = []
+        self.fetch_modes: list[str] = []
         self.active_transactions: list[bool] = []
         self.after_extract = None
 
-    def fetch_text(self, url: str) -> str:
+    def fetch_text(self, url: str, *, mode: str = "auto", http_fallback: bool = False) -> str:
         self._record(url)
+        self.fetch_modes.append(mode)
         return "<rss><channel></channel></rss>"
 
     def extract_article(self, url: str) -> ExtractedArticle:
@@ -77,7 +79,12 @@ def task_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         engine.dispose()
 
 
-def catalog(sessions: sessionmaker[Session], *, seed_urls: list[tuple[str, bool, str, date]]):
+def catalog(
+    sessions: sessionmaker[Session],
+    *,
+    seed_urls: list[tuple[str, bool, str, date]],
+    discovery_config_json: str | None = None,
+):
     with sessions.begin() as db:
         source = Source(
             code="xinhua",
@@ -98,7 +105,8 @@ def catalog(sessions: sessionmaker[Session], *, seed_urls: list[tuple[str, bool,
             include_keywords_json='["中共中央政治局召开会议"]',
             exclude_keywords_json='["视频"]',
             history_years=5,
-            discovery_config_json='{"rss_urls":[],"channel_urls":["https://www.news.cn/channel"]}',
+            discovery_config_json=discovery_config_json
+            or '{"rss_urls":[],"channel_urls":["https://www.news.cn/channel"]}',
             is_active=True,
             created_at=NOW,
             updated_at=NOW,
@@ -227,7 +235,7 @@ def test_runner_persists_paragraph_structured_body_recovered_from_html(task_db) 
         + "</div>策划：孙承斌 新华通讯社出品 阅读下一篇： 37 其他推荐</body></html>"
     )
 
-    def fetch_text(requested_url: str) -> str:
+    def fetch_text(requested_url: str, **_kwargs: object) -> str:
         if requested_url == url:
             return paragraph_html
         return "<rss><channel></channel></rss>"  # discovery: no extra candidates
@@ -259,7 +267,7 @@ def test_runner_falls_back_to_flat_content_when_paragraph_fetch_fails(task_db) -
     )
     client = FakeWebFetch(task_db, {url: article("2026-08-01", content=noisy_body)})
 
-    def fetch_text(requested_url: str) -> str:
+    def fetch_text(requested_url: str, **_kwargs: object) -> str:
         if requested_url == url:
             raise WebFetchClientError(code="WEBFETCH_UNAVAILABLE", message="段落抓取失败", retryable=True)
         return "<rss><channel></channel></rss>"  # discovery succeeds with no extra candidates
@@ -322,7 +330,7 @@ def test_runner_verified_seed_failure_overrides_partial_success_and_preserves_se
     client = FakeWebFetch(
         task_db, {seed: article("2026-08-01", title="标题不一致"), other: article("2026-07-30")}
     )
-    client.fetch_text = lambda _url: (
+    client.fetch_text = lambda _url, **_kwargs: (
         f'<a href="{seed}">中共中央政治局召开会议</a><a href="{other}">中共中央政治局召开会议</a>'
     )
 
@@ -372,7 +380,7 @@ def test_runner_continues_after_failure_and_summarizes_mixed_results(task_db) ->
             stored: article("2026-07-31"),
         },
     )
-    client.fetch_text = lambda _url: "".join(
+    client.fetch_text = lambda _url, **_kwargs: "".join(
         f'<a href="{url}">中共中央政治局召开会议</a>' for url in (failed, filtered, stored)
     )
 
@@ -416,7 +424,7 @@ def test_runner_honors_pending_and_between_candidate_cancellation(task_db) -> No
         task_db,
         {url: article("2026-08-01"), first: article("2026-07-30"), second: article("2026-07-31")},
     )
-    running_client.fetch_text = lambda _url: (
+    running_client.fetch_text = lambda _url, **_kwargs: (
         f'<a href="{first}">中共中央政治局召开会议</a><a href="{second}">中共中央政治局召开会议</a>'
     )
     running_client.after_extract = lambda _url: TaskRepository(task_db).request_cancel(running_id, NOW)
@@ -437,7 +445,7 @@ def test_runner_marks_cross_url_same_content_duplicate(task_db) -> None:
     task_id, _ = catalog(task_db, seed_urls=[])
     shared = article("2026-07-30")
     client = FakeWebFetch(task_db, {first: shared, second: shared})
-    client.fetch_text = lambda _url: (
+    client.fetch_text = lambda _url, **_kwargs: (
         f'<a href="{first}">中共中央政治局召开会议</a><a href="{second}">中共中央政治局召开会议</a>'
     )
 
@@ -457,7 +465,7 @@ def test_policy_and_item_completion_are_atomic_on_item_update_failure(task_db) -
     url = "https://www.news.cn/20260730/atomic.html"
     task_id, _ = catalog(task_db, seed_urls=[])
     client = FakeWebFetch(task_db, {url: article("2026-07-30")})
-    client.fetch_text = lambda _url: f'<a href="{url}">中共中央政治局召开会议</a>'
+    client.fetch_text = lambda _url, **_kwargs: f'<a href="{url}">中共中央政治局召开会议</a>'
     with task_db.begin() as db:
         db.execute(
             text(
@@ -491,8 +499,8 @@ def test_concurrent_runners_same_content_store_once_and_duplicate_once(task_db) 
     shared_article = article("2026-07-30")
     first_client = FakeWebFetch(task_db, {first_url: shared_article})
     second_client = FakeWebFetch(task_db, {second_url: shared_article})
-    first_client.fetch_text = lambda _url: f'<a href="{first_url}">中共中央政治局召开会议</a>'
-    second_client.fetch_text = lambda _url: f'<a href="{second_url}">中共中央政治局召开会议</a>'
+    first_client.fetch_text = lambda _url, **_kwargs: f'<a href="{first_url}">中共中央政治局召开会议</a>'
+    second_client.fetch_text = lambda _url, **_kwargs: f'<a href="{second_url}">中共中央政治局召开会议</a>'
     barrier = Barrier(2)
     first_client.after_extract = lambda _url: barrier.wait(timeout=5)
     second_client.after_extract = lambda _url: barrier.wait(timeout=5)
@@ -516,7 +524,7 @@ def test_runner_updates_policy_and_revision_references_real_second_task_item(tas
     url = "https://www.news.cn/20260730/revision.html"
     first_id, _ = catalog(task_db, seed_urls=[])
     first_client = FakeWebFetch(task_db, {url: article("2026-07-30")})
-    first_client.fetch_text = lambda _url: f'<a href="{url}">中共中央政治局召开会议</a>'
+    first_client.fetch_text = lambda _url, **_kwargs: f'<a href="{url}">中共中央政治局召开会议</a>'
     assert runner(task_db, first_client).run(first_id).status is TaskStatus.SUCCEEDED
     with task_db.begin() as db:
         second = CrawlTask(rule_id=1, trigger_type="manual", status="pending", request_snapshot_json="{}")
@@ -549,7 +557,7 @@ def test_real_rss_relative_url_discovery_and_partial_entry_failure(task_db) -> N
         )
     client = FakeWebFetch(task_db, {absolute: article("2026-07-30")})
 
-    def discover(url: str) -> str:
+    def discover(url: str, **_kwargs: object) -> str:
         if url.endswith("broken"):
             raise WebFetchClientError(code="WEBFETCH_UNAVAILABLE", message="safe", retryable=True)
         return (
@@ -591,7 +599,7 @@ def test_all_ordinary_failures_fail_and_all_filtered_candidates_succeed(task_db)
         task_db,
         {failed_url: WebFetchClientError(code="WEBFETCH_UNAVAILABLE", message="safe", retryable=True)},
     )
-    failed_client.fetch_text = lambda _url: f'<a href="{failed_url}">中共中央政治局召开会议</a>'
+    failed_client.fetch_text = lambda _url, **_kwargs: f'<a href="{failed_url}">中共中央政治局召开会议</a>'
     assert runner(task_db, failed_client).run(failed_id).status is TaskStatus.FAILED
 
     with task_db.begin() as db:
@@ -603,7 +611,9 @@ def test_all_ordinary_failures_fail_and_all_filtered_candidates_succeed(task_db)
         filtered_id = filtered_task.id
     filtered_url = "https://www.news.cn/20260730/filtered.html"
     filtered_client = FakeWebFetch(task_db, {filtered_url: article("2026-07-30", title="其他标题")})
-    filtered_client.fetch_text = lambda _url: f'<a href="{filtered_url}">中共中央政治局召开会议</a>'
+    filtered_client.fetch_text = lambda _url, **_kwargs: (
+        f'<a href="{filtered_url}">中共中央政治局召开会议</a>'
+    )
     assert runner(task_db, filtered_client).run(filtered_id).status is TaskStatus.SUCCEEDED
 
 
@@ -857,7 +867,7 @@ def test_path_redaction_preserves_space_before_following_url(task_db) -> None:
 def test_all_discovery_failures_fail_task_but_successful_empty_discovery_succeeds(task_db) -> None:
     task_id, _ = catalog(task_db, seed_urls=[])
     failed_client = FakeWebFetch(task_db, {})
-    failed_client.fetch_text = lambda _url: (_ for _ in ()).throw(
+    failed_client.fetch_text = lambda _url, **_kwargs: (_ for _ in ()).throw(
         WebFetchClientError(code="WEBFETCH_UNAVAILABLE", message="unsafe", retryable=True)
     )
     assert runner(task_db, failed_client).run(task_id).status is TaskStatus.FAILED
@@ -874,7 +884,9 @@ def test_last_candidate_cancellation_keeps_discovered_total(task_db) -> None:
     urls = [f"https://www.news.cn/202607{i:02d}/item.html" for i in range(20, 30)]
     task_id, _ = catalog(task_db, seed_urls=[])
     client = FakeWebFetch(task_db, {url: article("2026-07-20") for url in urls})
-    client.fetch_text = lambda _url: "".join(f'<a href="{url}">中共中央政治局召开会议</a>' for url in urls)
+    client.fetch_text = lambda _url, **_kwargs: "".join(
+        f'<a href="{url}">中共中央政治局召开会议</a>' for url in urls
+    )
     client.after_extract = lambda _url: TaskRepository(task_db).request_cancel(task_id, NOW)
 
     assert runner(task_db, client).run(task_id).status is TaskStatus.CANCELLED
@@ -900,3 +912,48 @@ def test_beijing_window_starts_at_midnight(task_db) -> None:
     client = FakeWebFetch(task_db, {boundary: article("2021-08-01")})
     assert runner(task_db, client).run(task_id).status is TaskStatus.SUCCEEDED
     assert boundary in client.calls and old not in client.calls
+
+
+def test_runner_passes_configured_channel_fetch_mode_to_webfetch(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    task_id, _ = catalog(
+        task_db,
+        seed_urls=[(url, False, "", date(2026, 8, 1))],
+        discovery_config_json=(
+            '{"rss_urls":[],"channel_urls":["https://www.news.cn/channel"],"channel_fetch_mode":"browser"}'
+        ),
+    )
+    client = FakeWebFetch(task_db, {url: article("2026-08-01")})
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    assert client.fetch_modes[0] == "browser"
+
+
+def test_runner_defaults_channel_fetch_mode_to_auto(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    task_id, _ = catalog(task_db, seed_urls=[(url, False, "", date(2026, 8, 1))])
+    client = FakeWebFetch(task_db, {url: article("2026-08-01")})
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    assert client.fetch_modes[0] == "auto"
+
+
+def test_discovery_config_rejects_unknown_channel_fetch_mode() -> None:
+    import pytest
+    from policy_analysis.sources.schemas import DiscoveryConfig
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DiscoveryConfig.model_validate(
+            {
+                "rss_urls": [],
+                "channel_urls": ["https://www.news.cn/channel"],
+                "channel_fetch_mode": "headless",
+            }
+        )
+    config = DiscoveryConfig.model_validate({"rss_urls": [], "channel_urls": ["https://www.news.cn/channel"]})
+    assert config.channel_fetch_mode == "auto"

@@ -26,7 +26,7 @@ BEIJING = ZoneInfo("Asia/Shanghai")
 
 
 class WebFetch(Protocol):
-    def fetch_text(self, url: str) -> str: ...
+    def fetch_text(self, url: str, *, mode: str = "auto", http_fallback: bool = False) -> str: ...
     def extract_article(self, url: str) -> ExtractedArticle: ...
 
 
@@ -352,7 +352,14 @@ class TaskRunner:
             attempted += 1
             try:
                 links = collector.discover_from_links(
-                    _extract_html_links(self._webfetch.fetch_text(url)), url
+                    _extract_html_links(
+                        self._webfetch.fetch_text(
+                            url,
+                            mode=discovery.channel_fetch_mode,
+                            http_fallback=True,
+                        )
+                    ),
+                    url,
                 )
             except (WebFetchClientError, ValueError):
                 failed += 1

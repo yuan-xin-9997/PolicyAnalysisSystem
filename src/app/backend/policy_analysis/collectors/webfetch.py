@@ -200,10 +200,20 @@ class WebFetchClient:
             published_hint=payload.data.date,
         )
 
-    def fetch_text(self, url: str) -> str:
+    def fetch_text(self, url: str, *, mode: str = "auto", http_fallback: bool = False) -> str:
+        """抓取页面文本。
+
+        ``mode`` 透传给 WebFetch 的抓取策略（auto/http/browser）；
+        ``http_fallback`` 在 browser 渲染失败时回退 HTTP 抓取静态骨架。
+        """
         response = self._post_with_retries(
             "v1/fetch",
-            {"url": url, "mode": "auto", "save_artifact": False},
+            {
+                "url": url,
+                "mode": mode,
+                "save_artifact": False,
+                "http_fallback": http_fallback,
+            },
         )
         return _validated_model(_FetchResponse, response).body
 

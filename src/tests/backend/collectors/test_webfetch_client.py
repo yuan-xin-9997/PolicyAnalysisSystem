@@ -135,6 +135,7 @@ def test_fetch_text_sends_fixed_options_and_returns_original_body() -> None:
             "url": FEED_URL,
             "mode": "auto",
             "save_artifact": False,
+            "http_fallback": False,
         }
         return httpx.Response(200, json=_fetch_payload(body=original_body))
 
