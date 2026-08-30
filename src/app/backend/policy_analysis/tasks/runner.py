@@ -456,7 +456,7 @@ def _rolling_window(now: datetime, years: int) -> tuple[datetime, datetime]:
 def _seed_mismatch(candidate: _Candidate, title: str, published_at: datetime | None) -> str | None:
     if not candidate.verified_seed:
         return None
-    if title.strip() != candidate.expected_title:
+    if " ".join(title.split()) != " ".join((candidate.expected_title or "").split()):
         return "SEED_TITLE_MISMATCH"
     if published_at is None or published_at.astimezone(BEIJING).date() != candidate.expected_date:
         return "SEED_DATE_MISMATCH"

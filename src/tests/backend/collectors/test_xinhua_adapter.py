@@ -775,6 +775,10 @@ def test_paragraph_body_returns_empty_when_no_p_blocks() -> None:
         ("中共中央政治局召开会议_央视网", "中共中央政治局召开会议"),
         ("中共中央政治局召开会议", "中共中央政治局召开会议"),
         ("中美经贸磋商-联合声明", "中美经贸磋商-联合声明"),
+        (
+            "中共中央政治局召开会议  中共中央总书记习近平主持会议",
+            "中共中央政治局召开会议 中共中央总书记习近平主持会议",
+        ),
     ],
 )
 def test_classify_strips_official_site_suffix_from_extracted_title(raw_title: str, expected: str) -> None:

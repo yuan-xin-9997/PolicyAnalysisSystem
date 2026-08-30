@@ -296,6 +296,25 @@ def test_runner_accepts_verified_seed_when_extracted_title_carries_site_suffix(t
         assert (task.success_count, task.failed_count) == (1, 0)
 
 
+def test_runner_accepts_verified_seed_when_extracted_title_has_extra_whitespace(task_db) -> None:
+    url = "https://www.news.cn/20260801/seed.html"
+    expected_title = "中共中央政治局召开会议 中共中央总书记习近平主持会议"
+    task_id, _ = catalog(task_db, seed_urls=[(url, True, expected_title, date(2026, 8, 1))])
+    client = FakeWebFetch(
+        task_db, {url: article("2026-08-01", title="中共中央政治局召开会议  中共中央总书记习近平主持会议")}
+    )
+
+    result = runner(task_db, client).run(task_id)
+
+    assert result.status is TaskStatus.SUCCEEDED
+    with task_db() as db:
+        policy = db.scalar(select(Policy))
+        assert policy is not None
+        assert policy.title == expected_title
+        task = db.get(CrawlTask, task_id)
+        assert (task.success_count, task.failed_count) == (1, 0)
+
+
 def test_runner_verified_seed_failure_overrides_partial_success_and_preserves_seed_identity(task_db) -> None:
     seed = "https://www.news.cn/20260801/seed.html"
     other = "https://www.news.cn/20260730/other.html"

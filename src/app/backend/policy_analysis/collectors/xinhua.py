@@ -189,8 +189,8 @@ class XinhuaCollector:
         host = normalized_http_hostname(canonical)
         published_at = self._published_at(article, canonical)
         cutoff_at = _as_beijing(cutoff)
-        title = _strip_site_suffix(article.title)
-        normalized_title = _collapsed(title)
+        title = _collapsed(_strip_site_suffix(article.title))
+        normalized_title = title
         normalized_content = _collapsed(article.content)
         lead = normalized_content[:_LEAD_LIMIT]
         publisher = _publisher(article.author, normalized_content)
