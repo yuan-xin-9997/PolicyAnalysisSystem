@@ -162,7 +162,8 @@ async function triggerManualTask(): Promise<void> {
     <p v-if="loading" role="status" class="state-card">正在加载任务</p>
     <p v-else-if="errorMessage" role="alert" class="state-card error-state">{{ errorMessage }}</p>
     <p v-else-if="tasks.length === 0" class="state-card">暂无任务</p>
-    <table v-else class="data-table">
+    <div v-else class="table-wrap" tabindex="0" aria-label="任务列表，可横向滚动">
+      <table class="data-table">
       <thead>
         <tr>
           <th>任务</th>
@@ -185,7 +186,8 @@ async function triggerManualTask(): Promise<void> {
           <td>{{ formatBeijingTime(task.finished_at) }}</td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
 
     <nav v-if="total > filters.pageSize" class="pagination" aria-label="任务分页">
       <button type="button" :disabled="filters.page <= 1" @click="changePage(filters.page - 1)">上一页</button>

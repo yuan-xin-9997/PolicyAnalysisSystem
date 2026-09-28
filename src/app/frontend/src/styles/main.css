@@ -40,8 +40,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .status-pill.muted { color: #6d6659; background: #efede7; }
 .state-card { padding: 28px; border: 1px dashed #c8d4cd; border-radius: 14px; color: #5e6b65; text-align: center; background: #f8faf8; }
 .error-state, .form-error { color: #a2392f; }
-.table-wrap { overflow-x: auto; border: 1px solid #e1e7e2; border-radius: 14px; }
+.table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; border: 1px solid #e1e7e2; border-radius: 14px; -webkit-overflow-scrolling: touch; }
+.table-wrap:focus-visible { outline: 3px solid #d49a42; outline-offset: 3px; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.data-table { min-width: 700px; }
 th, td { padding: 15px 18px; border-bottom: 1px solid #e8ece9; text-align: left; vertical-align: top; }
 th { color: #65736d; background: #f6f8f6; font-size: 12px; letter-spacing: .04em; }
 tbody tr:last-child td { border-bottom: 0; }

@@ -78,7 +78,8 @@ function startEditing(rule: CollectionRule): void {
       />
       <p v-else class="state-card">普通用户仅可查看规则，不能新增或编辑。</p>
 
-      <table class="data-table">
+      <div class="table-wrap" tabindex="0" aria-label="采集规则列表，可横向滚动">
+        <table class="data-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -122,7 +123,8 @@ function startEditing(rule: CollectionRule): void {
             <td :colspan="isAdmin ? 12 : 11">暂无采集规则</td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
     </template>
   </section>
 </template>

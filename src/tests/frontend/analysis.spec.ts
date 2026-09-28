@@ -84,6 +84,9 @@ describe('政策分析', () => {
     await renderAnalysis()
     expect(await screen.findByText('任务 #51')).toBeInTheDocument()
     expect(await screen.findByText('人工智能')).toBeInTheDocument()
+    for (const table of screen.getAllByRole('table')) {
+      expect(table.parentElement).toHaveClass('table-wrap')
+    }
     expect(screen.getByText('12')).toBeInTheDocument()
     expect(screen.getByText('0.920')).toBeInTheDocument()
     expect(screen.getAllByText('已完成').length).toBeGreaterThan(0)

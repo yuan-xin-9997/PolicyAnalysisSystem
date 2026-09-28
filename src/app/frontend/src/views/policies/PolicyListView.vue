@@ -284,7 +284,8 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
     <p v-if="loading" role="status" class="state-card">正在加载政策</p>
     <p v-else-if="errorMessage" role="alert" class="state-card error-state">{{ errorMessage }}</p>
     <p v-else-if="policies.length === 0" class="state-card">暂无政策</p>
-    <table v-else class="data-table">
+    <div v-else class="table-wrap" tabindex="0" aria-label="政策列表，可横向滚动">
+      <table class="data-table">
       <thead>
         <tr>
           <th class="select-col">
@@ -341,7 +342,8 @@ function sortButtonLabel(label: string, sortBy: PolicyQueryForm['sortBy']): stri
           <td>{{ policy.source.name }}</td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
 
     <nav v-if="total > form.pageSize" class="pagination" aria-label="政策分页">
       <button type="button" :disabled="form.page <= 1" @click="changePage(form.page - 1)">上一页</button>

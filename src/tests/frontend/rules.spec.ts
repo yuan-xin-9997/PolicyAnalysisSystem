@@ -178,6 +178,7 @@ describe('采集规则', () => {
 
     renderRules('user')
     expect(await screen.findByText('普通用户仅可查看规则，不能新增或编辑。')).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-wrap')
     expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: '9' })).toBeInTheDocument()
     expect(screen.queryByText('新增采集规则')).not.toBeInTheDocument()

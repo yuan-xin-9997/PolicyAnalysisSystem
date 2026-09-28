@@ -55,6 +55,9 @@ describe('任务详情', () => {
     render(TaskDetailView, { props: { taskId: 9 } })
 
     expect((await screen.findAllByText('运行')).length).toBeGreaterThan(0)
+    for (const table of screen.getAllByRole('table')) {
+      expect(table.parentElement).toHaveClass('table-wrap')
+    }
     expect(screen.getByText('2 / 5')).toBeInTheDocument()
     expect(screen.getByText('CONTENT_TOO_SHORT 正文过短')).toBeInTheDocument()
     expect(screen.getByText('<b>已脱敏</b>')).toBeInTheDocument()

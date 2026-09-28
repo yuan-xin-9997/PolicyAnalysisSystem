@@ -231,7 +231,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
             <button type="button" @click="sortWords('frequency')">按频次排序</button>
             <button type="button" @click="sortWords('tfidf')">按 TF-IDF 排序</button>
           </div>
-          <table class="data-table">
+          <div class="table-wrap" tabindex="0" aria-label="词频排行，可横向滚动">
+            <table class="data-table">
             <thead>
               <tr>
                 <th>关键词</th>
@@ -248,7 +249,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
                 <td>{{ item.doc_count }}</td>
               </tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
 
         <div v-if="activeTab === 'cloud'" class="tab-panel">
@@ -267,7 +269,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
 
         <section>
           <h3>政策概览</h3>
-          <table class="data-table">
+          <div class="table-wrap" tabindex="0" aria-label="政策概览，可横向滚动">
+            <table class="data-table">
             <thead><tr><th>政策</th><th>发布部门</th><th>发布时间</th><th>核心关键词</th></tr></thead>
             <tbody>
               <tr v-for="policy in comparison.policies" :key="policy.id">
@@ -277,7 +280,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
                 <td>{{ policy.top_keywords.join('、') || '无' }}</td>
               </tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </section>
 
         <section>
@@ -300,28 +304,30 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
 
     <div class="analysis-history">
       <h2>历史分析任务</h2>
-      <table v-if="history.length > 0" class="data-table">
-        <thead>
-          <tr>
-            <th>任务</th>
-            <th>类型</th>
-            <th>状态</th>
-            <th>政策数</th>
-            <th>创建时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in history" :key="item.id">
-            <td>
-              <button class="link-button" @click="selectHistory(item.id)">#{{ item.id }}</button>
-            </td>
-            <td>{{ taskTypeText(item.task_type) }}</td>
-            <td>{{ statusText(item.status) }}</td>
-            <td>{{ item.policy_count }}</td>
-            <td>{{ formatBeijingTime(item.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="history.length > 0" class="table-wrap" tabindex="0" aria-label="历史分析任务，可横向滚动">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>政策数</th>
+              <th>创建时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in history" :key="item.id">
+              <td>
+                <button class="link-button" @click="selectHistory(item.id)">#{{ item.id }}</button>
+              </td>
+              <td>{{ taskTypeText(item.task_type) }}</td>
+              <td>{{ statusText(item.status) }}</td>
+              <td>{{ item.policy_count }}</td>
+              <td>{{ formatBeijingTime(item.created_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="state-card">暂无历史任务，前往政策数据库选择政策开始分析。</p>
     </div>
   </section>

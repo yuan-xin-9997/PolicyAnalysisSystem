@@ -64,6 +64,7 @@ describe('任务列表', () => {
     await renderList()
 
     expect(await screen.findByText('#9')).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-wrap')
     expect(screen.getAllByText('运行').length).toBeGreaterThan(0)
     expect(screen.getByText('2 / 5')).toBeInTheDocument()
     expect(screen.getByText('2026-07-31 12:00:00')).toBeInTheDocument()
