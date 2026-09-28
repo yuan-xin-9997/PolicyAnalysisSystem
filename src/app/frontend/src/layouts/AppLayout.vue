@@ -1,14 +1,43 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { NAVIGATION_ITEMS } from '../navigation'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const visibleItems = computed(() => NAVIGATION_ITEMS.filter((item) => auth.canAccess(item.code)))
 const signingOut = ref(false)
+const mobileNavigationOpen = ref(false)
+
+function closeMobileNavigation(): void {
+  mobileNavigationOpen.value = false
+}
+
+function toggleMobileNavigation(): void {
+  mobileNavigationOpen.value = !mobileNavigationOpen.value
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closeMobileNavigation()
+}
+
+watch(
+  () => route.fullPath,
+  () => closeMobileNavigation(),
+)
+
+watch(mobileNavigationOpen, (open) => {
+  document.body.classList.toggle('navigation-open', open)
+})
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  document.body.classList.remove('navigation-open')
+})
 
 async function signOut(): Promise<void> {
   if (signingOut.value) return
@@ -24,7 +53,38 @@ async function signOut(): Promise<void> {
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
+    <header class="mobile-header">
+      <div class="brand compact-brand">
+        <span class="brand-mark" aria-hidden="true">策</span>
+        <div>
+          <strong>政策分析系统</strong>
+          <small>POLICY DESK</small>
+        </div>
+      </div>
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-controls="primary-sidebar"
+        :aria-expanded="mobileNavigationOpen"
+        :aria-label="mobileNavigationOpen ? '关闭导航菜单' : '打开导航菜单'"
+        @click="toggleMobileNavigation"
+      >
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </button>
+    </header>
+
+    <button
+      v-if="mobileNavigationOpen"
+      class="navigation-backdrop"
+      type="button"
+      aria-label="关闭导航遮罩"
+      data-testid="navigation-backdrop"
+      @click="closeMobileNavigation"
+    ></button>
+
+    <aside id="primary-sidebar" class="sidebar" :class="{ 'is-open': mobileNavigationOpen }">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">策</span>
         <div>
@@ -34,7 +94,12 @@ async function signOut(): Promise<void> {
       </div>
 
       <nav class="main-nav" aria-label="主导航">
-        <RouterLink v-for="item in visibleItems" :key="item.code" :to="item.path">
+        <RouterLink
+          v-for="item in visibleItems"
+          :key="item.code"
+          :to="item.path"
+          @click="closeMobileNavigation"
+        >
           <span class="nav-dot" aria-hidden="true"></span>
           <span>{{ item.label }}</span>
         </RouterLink>

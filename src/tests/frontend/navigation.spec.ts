@@ -53,6 +53,47 @@ describe('权限导航', () => {
     }
   })
 
+  it('移动导航可通过按钮、Escape、遮罩和导航跳转关闭', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'admin', role: 'admin', pages: [] }
+    const router = createPolicyRouter(pinia, createMemoryHistory())
+    await router.push('/policies')
+    await router.isReady()
+
+    render(App, { global: { plugins: [pinia, router] } })
+
+    let toggle = screen.getByRole('button', { name: '打开导航菜单' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    await fireEvent.click(toggle)
+    toggle = screen.getByRole('button', { name: '关闭导航菜单' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('navigation-backdrop')).toBeInTheDocument()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('button', { name: '打开导航菜单' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: '打开导航菜单' }))
+    await fireEvent.click(screen.getByTestId('navigation-backdrop'))
+    expect(screen.getByRole('button', { name: '打开导航菜单' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: '打开导航菜单' }))
+    await fireEvent.click(within(screen.getByRole('navigation', { name: '主导航' })).getByText('任务中心'))
+    await waitFor(() => expect(router.currentRoute.value.path).toBe('/tasks'))
+    expect(screen.getByRole('button', { name: '打开导航菜单' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+  })
+
   it('直接访问未授权路由时跳到首个授权页', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
