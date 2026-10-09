@@ -6,7 +6,7 @@ PID_FILE="${ROOT_DIR}/src/logs/server.pid"
 LOG_FILE="${ROOT_DIR}/src/logs/app.log"
 APP_DIR="${ROOT_DIR}/src/app/backend"
 CONFIG_FILE="${ROOT_DIR}/src/config/app.json"
-HOST="${POLICY_ANALYSIS_SERVER__HOST:-127.0.0.1}"
+HOST="${POLICY_ANALYSIS_SERVER__HOST:-0.0.0.0}"
 PORT="${POLICY_ANALYSIS_SERVER__PORT:-}"
 
 if [ -z "${PORT}" ] && [ -f "${CONFIG_FILE}" ]; then
