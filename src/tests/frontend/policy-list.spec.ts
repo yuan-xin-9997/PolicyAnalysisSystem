@@ -121,6 +121,7 @@ describe('政策列表', () => {
     await renderList()
 
     expect(await screen.findByText('中共中央政治局召开会议')).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-wrap')
     expect(screen.getByRole('cell', { name: '新华社' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: '中央政治局会议' })).toBeInTheDocument()
     expect(screen.getByText('2026-07-30 14:00:00')).toBeInTheDocument()

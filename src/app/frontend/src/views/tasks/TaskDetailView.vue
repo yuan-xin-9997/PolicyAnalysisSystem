@@ -85,28 +85,32 @@ async function cancelTask(): Promise<void> {
       </dl>
 
       <h2>任务明细</h2>
-      <table class="data-table">
-        <thead><tr><th>候选 URL</th><th>状态</th><th>原因</th></tr></thead>
-        <tbody>
-          <tr v-for="item in items" :key="item.id">
-            <td>{{ item.candidate_url }}</td>
-            <td>{{ item.status }}</td>
-            <td>{{ item.reason_code }} {{ item.reason_message }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap" tabindex="0" aria-label="任务明细，可横向滚动">
+        <table class="data-table">
+          <thead><tr><th>候选 URL</th><th>状态</th><th>原因</th></tr></thead>
+          <tbody>
+            <tr v-for="item in items" :key="item.id">
+              <td>{{ item.candidate_url }}</td>
+              <td>{{ item.status }}</td>
+              <td>{{ item.reason_code }} {{ item.reason_message }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <h2>任务日志</h2>
-      <table class="data-table">
-        <thead><tr><th>时间</th><th>级别</th><th>消息</th></tr></thead>
-        <tbody>
-          <tr v-for="log in logs" :key="log.id">
-            <td>{{ formatBeijingTime(log.created_at) }}</td>
-            <td>{{ log.level }}</td>
-            <td>{{ log.message }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap" tabindex="0" aria-label="任务日志，可横向滚动">
+        <table class="data-table">
+          <thead><tr><th>时间</th><th>级别</th><th>消息</th></tr></thead>
+          <tbody>
+            <tr v-for="log in logs" :key="log.id">
+              <td>{{ formatBeijingTime(log.created_at) }}</td>
+              <td>{{ log.level }}</td>
+              <td>{{ log.message }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 </template>

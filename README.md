@@ -81,6 +81,8 @@ npm --prefix src/app/frontend run build
 - 存活检查：<http://127.0.0.1:30080/health/live>
 - 就绪检查：<http://127.0.0.1:30080/health/ready>
 
+系统页面支持宽度 320px 及以上的现代 Chrome、Edge、Safari 和 Firefox 浏览器。手机和平板端通过页面顶部的菜单按钮打开导航抽屉；政策、任务、规则和分析结果等宽表格可在表格区域内左右滑动，不会带动整个页面横向滚动。桌面端继续使用左侧导航栏。
+
 根目录启停脚本、systemd 和 Jenkins 部署能力尚未在当前平台阶段交付，不能用这些入口替代上述开发命令。
 
 ## 平台阶段验证
@@ -104,7 +106,7 @@ npm --prefix src/app/frontend run build
 npm --prefix src/app/frontend run test:e2e
 ```
 
-`test:e2e` 使用 Playwright 启动 Vite 开发服务器，并通过浏览器网络拦截模拟安全的后端测试数据，覆盖管理员登录、主导航、政策检索、政策详情纯文本展示、手工触发采集任务和任务详情日志等主路径。
+`test:e2e` 使用 Playwright 启动 Vite 开发服务器，并通过浏览器网络拦截模拟安全的后端测试数据，覆盖管理员登录、主导航、政策检索、政策详情纯文本展示、手工触发采集任务、任务详情日志，以及 320px、390px、768px 视口的移动导航和页面溢出检查等主路径。
 
 ## 政策数据库页面
 
