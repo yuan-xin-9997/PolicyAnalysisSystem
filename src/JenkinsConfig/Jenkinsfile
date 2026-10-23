@@ -17,7 +17,6 @@ pipeline {
         APP_HOST = '0.0.0.0'
         APP_PORT = '30080'
         PYTHON_BIN = 'python3.12'
-        PID_FILE = 'src/logs/server.pid'
     }
 
     stages {
@@ -56,22 +55,9 @@ pipeline {
                 sh '''
                     set -eu
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
-                    if [ -f "${DEPLOY_DIR}/${PID_FILE}" ]; then
-                        PID="$(cat "${DEPLOY_DIR}/${PID_FILE}" || true)"
-                        if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null; then
-                            kill "${PID}" || true
-                            for i in $(seq 1 20); do
-                                if kill -0 "${PID}" 2>/dev/null; then
-                                    sleep 1
-                                else
-                                    break
-                                fi
-                            done
-                            if kill -0 "${PID}" 2>/dev/null; then
-                                kill -9 "${PID}" || true
-                            fi
-                        fi
-                        rm -f "${DEPLOY_DIR}/${PID_FILE}"
+                    sudo -n /usr/bin/systemctl stop policy-analysis.service
+                    if systemctl is-active --quiet policy-analysis.service; then
+                        exit 1
                     fi
                 '''
             }
@@ -148,21 +134,16 @@ EOF
                     set -eu
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
                     cd "${DEPLOY_DIR}"
-                    if [ -f service.env ]; then
-                        set +x
-                        set -a
-                        . ./service.env
-                        set +a
-                        set -x
-                    fi
-                    JENKINS_NODE_COOKIE=dontKillMe BUILD_ID=dontKillMe nohup .venv/bin/uvicorn policy_analysis.main:app \
-                        --app-dir src/app/backend \
-                        --host "${APP_HOST}" \
-                        --port "${APP_PORT}" \
-                        > src/logs/app.log 2>&1 &
-                    echo "$!" > "${PID_FILE}"
-                    sleep 3
-                    curl -fsS "http://127.0.0.1:${APP_PORT}/health/ready"
+                    sudo -n /usr/bin/systemctl start policy-analysis.service
+                    for attempt in $(seq 1 30); do
+                        if systemctl is-active --quiet policy-analysis.service && \
+                            curl -fsS "http://127.0.0.1:${APP_PORT}/health/ready"; then
+                            exit 0
+                        fi
+                        sleep 1
+                    done
+                    systemctl status policy-analysis.service --no-pager || true
+                    exit 1
                 '''
             }
         }

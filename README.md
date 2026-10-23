@@ -83,7 +83,7 @@ npm --prefix src/app/frontend run build
 
 系统页面支持宽度 320px 及以上的现代 Chrome、Edge、Safari 和 Firefox 浏览器。手机和平板端通过页面顶部的菜单按钮打开导航抽屉；政策、任务、规则和分析结果等宽表格可在表格区域内左右滑动，不会带动整个页面横向滚动。桌面端继续使用左侧导航栏。
 
-根目录启停脚本、systemd 和 Jenkins 部署能力尚未在当前平台阶段交付，不能用这些入口替代上述开发命令。
+线上由 `policy-analysis.service` 统一管理进程并读取部署目录的 `service.env`。Jenkins 在验证通过后通过 systemctl 停服、更新、启动，并检查服务状态与就绪接口；不再单独启动 uvicorn。Jenkins 用户需获准免密执行该服务的 start/stop 命令。部署保留线上 `src/config/app.json`、`service.env` 和数据库。运维使用 `systemctl status policy-analysis` 查看状态、`journalctl -u policy-analysis` 查看日志。
 
 ## 平台阶段验证
 

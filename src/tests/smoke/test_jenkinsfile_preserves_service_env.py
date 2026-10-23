@@ -10,8 +10,11 @@ def test_jenkinsfile_preserves_local_service_environment_file() -> None:
 
     assert "service.env" in jenkinsfile
     assert "--exclude 'service.env'" in jenkinsfile
-    assert ". ./service.env" in jenkinsfile
-    assert "set +x" in jenkinsfile
+    assert "sudo -n /usr/bin/systemctl stop policy-analysis.service" in jenkinsfile
+    assert "sudo -n /usr/bin/systemctl start policy-analysis.service" in jenkinsfile
+    assert "systemctl is-active --quiet policy-analysis.service" in jenkinsfile
+    assert "nohup" not in jenkinsfile
+    assert "server.pid" not in jenkinsfile
 
 
 def test_jenkinsfile_verifies_backend_and_frontend_before_stopping_service() -> None:
