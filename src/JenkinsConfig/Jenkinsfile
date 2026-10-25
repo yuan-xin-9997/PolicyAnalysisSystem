@@ -50,6 +50,16 @@ pipeline {
             }
         }
 
+        stage('Backup and check active tasks') {
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    "${WORKSPACE}/.venv/bin/python" "${WORKSPACE}/scripts/deployment.py" preflight --root "${DEPLOY_DIR}"
+                '''
+            }
+        }
+
         stage('Stop current service') {
             steps {
                 sh '''
@@ -70,29 +80,20 @@ pipeline {
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
                     mkdir -p "${DEPLOY_DIR}"
 
-                    if [ -f "${DEPLOY_DIR}/src/config/app.json" ]; then
-                        cp "${DEPLOY_DIR}/src/config/app.json" /tmp/policy-analysis-app.json
-                    fi
-                    if [ -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
-                        cp "${DEPLOY_DIR}/src/data/password.txt" /tmp/policy-analysis-password.txt
-                    fi
-
                     rsync -a --delete \
                         --exclude '.git/' \
                         --exclude '.venv/' \
                         --exclude 'service.env' \
-                        --exclude 'src/data/app.sqlite3' \
-                        --exclude 'src/data/password.txt' \
+                        --exclude 'src/config/app.json' \
+                        --exclude 'src/data/' \
                         --exclude 'src/logs/' \
                         "${WORKSPACE}/" "${DEPLOY_DIR}/"
 
                     mkdir -p "${DEPLOY_DIR}/src/config" "${DEPLOY_DIR}/src/data" "${DEPLOY_DIR}/src/logs"
-                    if [ -f /tmp/policy-analysis-app.json ]; then
-                        mv /tmp/policy-analysis-app.json "${DEPLOY_DIR}/src/config/app.json"
+                    if [ ! -f "${DEPLOY_DIR}/src/config/app.json" ]; then
+                        cp "${WORKSPACE}/src/config/app.json" "${DEPLOY_DIR}/src/config/app.json"
                     fi
-                    if [ -f /tmp/policy-analysis-password.txt ]; then
-                        mv /tmp/policy-analysis-password.txt "${DEPLOY_DIR}/src/data/password.txt"
-                    elif [ ! -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
+                    if [ ! -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
                         cat > "${DEPLOY_DIR}/src/data/password.txt" <<'EOF'
 # 格式: username:password:role  (role 取值: admin | user)
 # admin 默认拥有所有页面权限；user 的可见页面由管理员在权限管理页配置。
@@ -123,7 +124,7 @@ EOF
 
                     npm --prefix src/app/frontend ci
                     npm --prefix src/app/frontend run build
-                    .venv/bin/alembic upgrade head
+                    .venv/bin/python scripts/deployment.py migrate
                 '''
             }
         }
@@ -150,6 +151,14 @@ EOF
     }
 
     post {
+        success {
+            sh '''
+                set -eu
+                DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                cd "${DEPLOY_DIR}"
+                .venv/bin/python scripts/verify_ai_access.py --from-password-file
+            '''
+        }
         always {
             sh '''
                 set +e

@@ -14,6 +14,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import Engine
 
+from policy_analysis.ai.mcp import install_mcp
+from policy_analysis.ai.middleware import AutomationMiddleware
+from policy_analysis.ai.openapi import install_openapi
+from policy_analysis.ai.routes import router as automation_router
 from policy_analysis.analysis.repository import AnalysisRepository
 from policy_analysis.analysis.routes import router as analysis_router
 from policy_analysis.analysis.runner import AnalysisRunner
@@ -153,6 +157,10 @@ def create_app(
     app.include_router(analysis_router)
     app.include_router(system_router)
     app.include_router(health_router)
+    app.include_router(automation_router)
+    install_mcp(app)
+    app.add_middleware(AutomationMiddleware, owner=app)
+    install_openapi(app)
     _install_spa_routes(app, resolved_frontend_dist)
     return app
 

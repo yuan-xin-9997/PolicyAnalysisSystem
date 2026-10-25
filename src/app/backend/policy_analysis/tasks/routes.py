@@ -25,6 +25,76 @@ class TaskCreate(BaseModel):
     rule_id: int = Field(ge=1)
 
 
+class TaskProgress(BaseModel):
+    processed: int
+    discovered: int
+
+
+class TaskCounts(BaseModel):
+    success: int
+    duplicate: int
+    filtered: int
+    failed: int
+    total_terminal_items: int
+
+
+class TaskRead(BaseModel):
+    id: int
+    rule_id: int
+    trigger_type: str
+    status: str
+    requested_by: int | None
+    scheduled_for: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    cancel_requested_at: datetime | None
+    error_summary: str | None
+    progress: TaskProgress
+    counts: TaskCounts
+
+
+class TaskPage(BaseModel):
+    items: list[TaskRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class TaskLogRead(BaseModel):
+    id: int
+    level: str
+    message: str
+    context: Any
+    created_at: datetime
+
+
+class TaskLogPage(BaseModel):
+    items: list[TaskLogRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class TaskItemRead(BaseModel):
+    id: int
+    candidate_url: str
+    normalized_url: str | None
+    status: str
+    policy_id: int | None
+    attempt_count: int
+    reason_code: str | None
+    reason_message: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class TaskItemPage(BaseModel):
+    items: list[TaskItemRead]
+    total: int
+    page: int
+    page_size: int
+
+
 def get_task_repository(request: Request) -> TaskRepository:
     sessions = request.app.state.database_sessions
     if sessions is None:
@@ -36,7 +106,7 @@ def get_task_repository(request: Request) -> TaskRepository:
     return TaskRepository(sessions, secrets=secrets)
 
 
-@router.get("")
+@router.get("", response_model=TaskPage)
 def list_tasks(
     _user: PublicUser = Depends(require_tasks_page),
     repository: TaskRepository = Depends(get_task_repository),
@@ -47,7 +117,7 @@ def list_tasks(
     return _page([_task_to_read(task) for task in tasks], total, page, page_size)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=TaskRead)
 def create_task(
     request: Request,
     payload: TaskCreate,
@@ -69,7 +139,7 @@ def create_task(
     return _task_to_read(task)
 
 
-@router.get("/{task_id}")
+@router.get("/{task_id}", response_model=TaskRead)
 def get_task(
     task_id: PositiveId,
     _user: PublicUser = Depends(require_tasks_page),
@@ -81,7 +151,7 @@ def get_task(
     return _task_to_read(task)
 
 
-@router.post("/{task_id}/cancel")
+@router.post("/{task_id}/cancel", response_model=TaskRead)
 def cancel_task(
     task_id: PositiveId,
     _admin: PublicUser = Depends(require_admin_csrf),
@@ -97,7 +167,7 @@ def cancel_task(
     return _task_to_read(task)
 
 
-@router.get("/{task_id}/logs")
+@router.get("/{task_id}/logs", response_model=TaskLogPage)
 def list_task_logs(
     task_id: PositiveId,
     _user: PublicUser = Depends(require_tasks_page),
@@ -110,7 +180,7 @@ def list_task_logs(
     return _page([_log_to_read(log) for log in logs], total, page, page_size)
 
 
-@router.get("/{task_id}/items")
+@router.get("/{task_id}/items", response_model=TaskItemPage)
 def list_task_items(
     task_id: PositiveId,
     _user: PublicUser = Depends(require_tasks_page),

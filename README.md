@@ -2,6 +2,12 @@
 
 PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策采集与分析系统。当前后端已完成登录、权限、配置展示、来源规则、采集任务、WebFetch 抓取、政策去重入库、全文检索和任务调度能力。
 
+## AI API 与 MCP
+
+系统提供独立 Bearer 凭据访问现有 `/api/v1` 核心业务 API，并提供官方 Python MCP SDK 的 `/mcp/` Streamable HTTP 服务，共 21 个政策、采集及分析工具。MCP 使用 OAuth client_credentials 机器扩展及短期、绑定 resource 的令牌；网页登录和现有权限继续有效。
+
+完整地址、凭据创建/撤销、scope、OpenAPI、客户端示例、工具清单、限流/幂等/审计、部署备份与迁移回滚见 [AI 接入文档](docs/ai-integration.md)。实际开发、测试与部署状态见 [交付状态](docs/ai-delivery-status.md)。不声明支持尚未实现的交互式 OAuth 客户端。
+
 ## 本地开发
 
 ### 前置条件

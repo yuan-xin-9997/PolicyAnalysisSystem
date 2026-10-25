@@ -65,6 +65,12 @@ class AnalysisSettings(StrictSettingsModel):
     max_policies_per_task: int = Field(default=100, ge=1, le=1000)
 
 
+class AISettings(StrictSettingsModel):
+    public_base_url: str = ""
+    requests_per_minute: int = Field(default=120, ge=1, le=10000)
+    max_body_bytes: int = Field(default=262144, ge=1024, le=4194304)
+
+
 class AppSettings(StrictSettingsModel):
     server: ServerSettings = Field(default_factory=ServerSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -73,6 +79,7 @@ class AppSettings(StrictSettingsModel):
     tasks: TaskSettings = Field(default_factory=TaskSettings)
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
     analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
+    ai: AISettings = Field(default_factory=AISettings)
 
 
 @dataclass(frozen=True, slots=True)

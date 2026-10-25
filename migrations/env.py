@@ -5,6 +5,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
+from policy_analysis.ai import models as ai_models
 from policy_analysis.analysis import models as analysis_models
 from policy_analysis.auth import models as auth_models
 from policy_analysis.core.database import Base, build_engine
@@ -18,7 +19,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-del analysis_models, auth_models, policy_models, source_models, task_models
+del ai_models, analysis_models, auth_models, policy_models, source_models, task_models
 target_metadata = Base.metadata
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
