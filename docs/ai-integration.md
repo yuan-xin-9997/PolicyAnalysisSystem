@@ -11,7 +11,7 @@
 - RFC 9728 资源元数据：`/.well-known/oauth-protected-resource/mcp`
 - RFC 8414 授权服务器元数据：`/.well-known/oauth-authorization-server`
 
-上述是部署目标地址，不能仅据此认定服务已经上线。实际部署和验收状态见 `docs/ai-delivery-status.md`。
+上述地址已通过 Jenkins 构建 40 的真实 HTTPS OAuth/MCP 语义验收。部署提交、备份位置、测试证据和明确限制见 `docs/ai-delivery-status.md`。
 
 ## 凭据与权限
 

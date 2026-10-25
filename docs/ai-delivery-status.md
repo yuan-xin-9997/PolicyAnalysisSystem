@@ -20,19 +20,27 @@
 - 前端 73 项单元测试、类型检查、ESLint、生产构建通过。Windows 的原 `npm run lint` shell 路径写法不可用，直接调用相同 ESLint 程序与相同配置/范围通过。
 - Ruff 检查、格式检查、git diff 空白检查通过；独立审查发现项已修复并回归。
 
-## 尚未部署，原因及剩余工作
+## 已部署并完成线上验收
 
-本次未执行生产停服、生产数据库迁移、生产写入或新增公网映射。
+主机恢复连通后，已通过 Jenkins API 触发构建。首次构建 39 在停服前发现 console `pytest` 的脚本模块路径问题；补齐 pytest 根路径及 scripts 包后，构建 **40 SUCCESS**，实现部署提交 **f780237**。线上 Jenkins 再次运行后端 753 项、前端 73 项测试及静态检查/构建，全部通过。
 
-部署主机 `192.168.0.111` 的 SSH 连接超时；读取部署文档中的 Jenkins 地址与凭据后，认证 API 请求仍超时，无法发现任务或触发构建。Tailscale 显示对应 Ubuntu 主机离线；现有站点健康检查返回 502。不能把本地成功记为线上部署成功。
+生产服务使用现有 systemd、端口和 HTTPS 站点，没有新增公网映射。在受保护的 `service.env` 设置规范地址，保留线上 `app.json`。部署前无 pending/running 任务；备份包括：
 
-网络/主机恢复后须完成：
+- 配置变更前：`/opt/PolicyAnalysisSystem/src/data/deployment-backups/pre-ai-20261025-105636`
+- 流水线升级前：`/opt/PolicyAnalysisSystem/src/data/deployment-backups/20261025-121231-090651`
 
-1. 检查实际线上配置和活动任务，在受保护的 `service.env` 设置 `POLICY_ANALYSIS_AI__PUBLIC_BASE_URL` 为现有 HTTPS 站点地址。缺少该配置时 Jenkins 会在停服前拒绝部署。
-2. 使用 Jenkins API 触发现有项目构建并确认完整结果；流水线会备份、迁移、启动及真实 MCP 验收。
-3. 检查线上 API/OpenAPI/MCP、现有网页登录、历史数据和任务；记录构建号、部署提交和备份位置。
+线上 SQLite `integrity_check=ok`，版本为 0008；升级前后均为 **70 条政策**，两份备份的 `app.json` 与线上文件摘要一致。验收临时凭据已撤销，审计可查到 MCP 写调用。
 
-目标地址为现有站点下的 `/api/v1`、`/openapi.json`、`/docs`、`/mcp/`；这些地址当前不作为已上线承诺。
+构建 40 的真实 HTTPS 验收结果：协议 `2025-11-25`，发现 **21 个工具**，查询成功，创建分析任务 **6**，状态 **succeeded**，返回 **20 条词频结果**；重试返回相同任务 ID。匿名、错误凭据、scope 越权与撤销凭据被拒绝。独立外部复核确认匿名 API、规范 MCP 路径及 MCP 子路径均返回 401。
+
+已上线地址：
+
+- API：`https://policy.yuan-xin.top/api/v1`
+- OpenAPI：`https://policy.yuan-xin.top/openapi.json`
+- 交互文档：`https://policy.yuan-xin.top/docs`
+- MCP：`https://policy.yuan-xin.top/mcp/`
+
+文档同步提交后的构建仍会重复执行安全检查、备份、升级及语义验收。具体最新构建号可见 Jenkins；本记录中的构建 40 是首次成功部署与完整线上验收的证据。
 
 ## 明确限制
 
