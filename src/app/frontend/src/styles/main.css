@@ -58,6 +58,27 @@ code { color: #27614f; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 label, fieldset { display: grid; gap: 7px; color: #34473f; font-size: 13px; font-weight: 700; }
 fieldset { border: 1px solid #dce3dc; border-radius: 12px; padding: 12px; }
 input, select, textarea { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid #cbd4cf; border-radius: 9px; color: #17221d; background: #fff; }
+.settings-tabs { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 24px; border-bottom: 1px solid #dce3dc; }
+.settings-tabs a { padding: 12px 0; color: #65736d; text-decoration: none; }
+.settings-tabs a.active { color: #153c32; border-bottom: 3px solid #21604e; font-weight: 700; }
+.ai-card { margin-top: 24px; padding: 20px; border: 1px solid #dce3dc; border-radius: 12px; min-width: 0; }
+.ai-card h2 { margin-top: 0; }
+.ai-access table { min-width: 860px; }
+.ai-form-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+.ai-scope { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.ai-scope input { width: 18px; min-height: 18px; flex: 0 0 18px; }
+.ai-scope small, .ai-id, .ai-scope-label { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.ai-scope small, .ai-help { color: #65736d; font-weight: 400; }
+.ai-access pre { max-width: 100%; overflow: auto; padding: 16px; background: #f3f6f2; border-radius: 8px; font-size: 13px; }
+.ai-access details { margin: 18px 0; }
+.ai-access summary { cursor: pointer; font-weight: 700; }
+.ai-addresses { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; }
+.ai-addresses dd { margin: 0; overflow-wrap: anywhere; }
+.ai-dialog { width: min(600px, calc(100% - 32px)); max-height: 90vh; overflow: auto; border: 1px solid #cbd4cf; border-radius: 16px; padding: 24px; }
+.ai-dialog::backdrop { background: rgb(15 35 25 / 55%); }
+.ai-dialog p { line-height: 1.7; overflow-wrap: anywhere; }
+.ai-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 600px) { .ai-form-fields { grid-template-columns: 1fr; } .ai-card { padding: 14px; } .ai-addresses { grid-template-columns: 1fr; gap: 6px; } }
 textarea { min-height: 90px; resize: vertical; }
 button { min-height: 38px; padding: 0 13px; border: 1px solid #cbd4cf; border-radius: 9px; color: #153c32; background: #fff; cursor: pointer; }
 button:hover:not(:disabled) { border-color: #27614f; background: #f3f7f4; }

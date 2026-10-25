@@ -45,6 +45,8 @@ class AutomationMiddleware:
         path, method = request.url.path, request.method
         is_mcp = path == "/mcp" or path.startswith("/mcp/")
         authorization = request.headers.get("authorization")
+        if authorization is None and path.startswith("/api/v1/credentials") and method in {"POST", "DELETE"}:
+            return await self.audit_credential_write(scope, receive, send)
         if not is_mcp and not (path.startswith("/api/") and authorization is not None):
             if path == "/oauth/token":
                 try:
@@ -208,6 +210,41 @@ class AutomationMiddleware:
         audit(self.owner, principal, "MCP_WRITE", tool, status)
         for message in messages:
             await send(message)
+
+    async def audit_credential_write(self, scope, receive, send):
+        recorded = False
+        target = "/api/v1/credentials"
+        if scope["method"] == "DELETE":
+            identifier = scope["path"].removeprefix(target).strip("/")
+            target += "/" + (identifier if re.fullmatch(r"[a-f0-9]{32}", identifier) else "{credential_id}")
+
+        async def capture(message):
+            nonlocal recorded
+            if message["type"] == "http.response.start" and message["status"] >= 400:
+                audit(
+                    self.owner,
+                    None,
+                    "CREDENTIAL_WRITE",
+                    target,
+                    message["status"],
+                    user=scope.get("state", {}).get("authenticated_user"),
+                )
+                recorded = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, capture)
+        except Exception:
+            if not recorded:
+                audit(
+                    self.owner,
+                    None,
+                    "CREDENTIAL_WRITE",
+                    target,
+                    500,
+                    user=scope.get("state", {}).get("authenticated_user"),
+                )
+            raise
 
     async def error(self, error, scope, receive, send, is_mcp=False):
         headers = {}

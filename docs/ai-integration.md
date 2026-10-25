@@ -15,7 +15,17 @@
 
 ## 凭据与权限
 
-现有网页登录、Cookie、CSRF 与角色/页面权限保持兼容。用户先用网页登录建立会话，通过下面接口管理自己的自动化凭据；机器凭据不能管理凭据、用户或系统配置。
+### 网页入口（推荐）
+
+登录现有系统后，通过侧栏「AI 接入」或系统配置页的设置标签进入 `/settings/ai-access`。所有已登录用户可管理自己的凭据，不要求系统配置页面权限；系统配置本身仍沿用原权限。页面会从服务端取得本人可授予范围，默认只选择一项最小只读权限；普通用户无法签发管理员能力，服务端也会拒绝伪造范围、user_id 以及跨用户管理请求。
+
+填写名称、有效天数和权限后创建。完整密钥只显示这一次，页面不自动刷新或跳转；复制后确认「我已安全保存密钥」再关闭。关闭后密钥从 DOM 和组件内存清除，重新打开只显示元数据。退出、整页离开、卸载也清理密钥，并防止迟到请求再次显示。浏览器 localStorage/sessionStorage、URL、日志、示例和下载文件不保存机器凭据或短期令牌；既有浏览器 CSRF 状态仍沿用原会话安全机制。
+
+「我的凭据」支持分页，展示名称、非敏感标识、授予/当前有效范围、北京时间和有效/过期/撤销状态。撤销前需确认，该凭据及关联 OAuth 令牌立即失效；遗失密钥应先撤销旧凭据再创建。页面展示当前环境的 API/OpenAPI/MCP 地址、只读调用示例、实际工具及兼容性清单；不会把本次密钥嵌入示例。不提供默认写入连接测试，日常 OAuth 令牌由客户端自动获取/续取。
+
+网页使用原 Cookie/CSRF 管理流程，下面的管理 API 供集成与审计参考，无需用户手工复制 Cookie 或提取 CSRF。新增只读接口：`GET /api/v1/ai-access`（地址、本人范围、工具、兼容性）及 `GET /api/v1/ai-access/credentials?page=1&page_size=10`（本人分页元数据）。旧管理 API 保持兼容。
+
+现有网页登录、Cookie、CSRF 与角色/页面权限保持兼容。用户通过网页完成管理，底层使用以下接口；机器凭据不能管理凭据、用户或系统配置。
 
 | 方法与路径 | 用途 |
 | --- | --- |
@@ -176,10 +186,10 @@ POLICY_ANALYSIS_AI__MAX_BODY_BYTES=262144
 
 `public_base_url` 是 OAuth issuer/resource 的规范地址；改变地址会使旧短期令牌失效，客户端需重新换取。机器 secret 不需要配置到服务端，只在客户端注入。
 
-1. Jenkins Verify 运行后端全量测试、静态检查及前端测试/构建。服务尚未停止。
-2. `scripts/deployment.py preflight --root <部署目录>` 使用本次已验证代码读取线上配置及 `service.env`，检测 pending/running 采集/分析任务；存在任务时停止本次部署。使用 SQLite backup API 生成一致性备份，并备份配置、密码文件、环境文件到部署目录的 `src/data/deployment-backups/北京时间戳`，目录 700、文件 600。
+1. Jenkins Verify 运行后端全量测试、静态检查及前端测试/构建。然后在 `.runtime-envs/<构建号>` 创建独立运行环境，使用 `.runtime-releases/<构建号>` 的持久源码安装所有依赖并执行 pip check。此时现有服务仍运行。
+2. `scripts/deployment.py preflight --root <部署目录>` 使用本次已验证代码读取线上配置及 `service.env`，检测 pending/running 采集/分析任务；存在任务时停止本次部署。使用 SQLite backup API 生成一致性备份，并备份配置、密码文件、环境文件及旧后端/前端产物/迁移/脚本 `code.tar.gz` 到部署目录的 `src/data/deployment-backups/北京时间戳`，目录 700、文件 600。
 3. systemd 优雅停服后 rsync 更新代码；整个 `src/data/`、`src/config/app.json`、`service.env`、日志和虚拟环境都保留。首次部署才初始化配置和密码文件。
-4. 安装依赖，`scripts/deployment.py migrate` 使用线上数据库配置运行 Alembic `0008`。迁移只新增四张 AI 接入表，不更改业务表和历史数据。
+4. 将旧环境保留为 `.venv-before-<构建号>`，将 `.venv` 链接切换到预备环境，`scripts/deployment.py migrate` 使用线上数据库配置运行 Alembic。网页增量不改数据库，最新版本仍为 `0008`。停服阶段不再执行 pip/npm 安装或前端构建，只更新、切换、迁移、启动；预计为秒级短暂停服，仍可能产生短暂 502，不能承诺无停机。
 5. `systemctl start policy-analysis`，检查 systemd 和 ready；Jenkins 成功后置步骤自动执行 `scripts/verify_ai_access.py --from-password-file`，读取线上受保护密码文件中的管理员，临时签发独立凭据并完成真实远程 MCP 验收，最后撤销凭据。验收失败会使构建失败。不要在 Jenkins 日志中展开凭据。
 
 验收脚本从 `AI_VERIFY_BASE_URL`、`AI_VERIFY_USERNAME`、`AI_VERIFY_PASSWORD` 环境变量读取信息，运行 `python scripts/verify_ai_access.py`。会临时创建凭据、查询已有政策、创建一条无外部网络副作用的词频任务、确认完成并读取非空结果，最后撤销凭据；保留分析任务作为审计证据。测试数据为空时明确失败，不伪造通过。脚本实测 OAuth 自动发现、协议初始化、21 个工具发现、查询、写入、重试及权限拒绝。
@@ -187,3 +197,15 @@ POLICY_ANALYSIS_AI__MAX_BODY_BYTES=262144
 回滚：先确认无活动任务、备份当前数据并停服，恢复上一提交代码及其依赖。新增表对旧代码无影响，通常保留数据库即可。若必须回退数据库，使用新代码环境执行 `alembic downgrade 0007`（同样注入线上数据库路径）；这会删除 AI 凭据、令牌、幂等和审计表，但不删除政策/业务任务。或在停服状态恢复备份 SQLite（同时移除对应 WAL/SHM，仅针对已确认的数据库文件）。恢复原配置及 service.env，回到旧代码时必须移除配置文件新增的 `ai` 节及 `POLICY_ANALYSIS_AI__*` 环境变量，因为旧版配置禁止未知字段；然后启服务并验证网页登录、政策检索和任务中心。整库恢复会丢弃备份后写入，优先采用保留新增表的代码回滚。
 
 规范参考：[官方 Python SDK](https://github.com/modelcontextprotocol/python-sdk)、[MCP 授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)、[OAuth client credentials 扩展](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials)。
+
+### 网页真实浏览器验收
+
+`node scripts/verify_ai_web.mjs` 使用真实 Chromium，连接 `AI_WEB_BASE_URL`，管理员账号/密码从 `AI_WEB_USERNAME`、`AI_WEB_PASSWORD` 环境注入。设置 `AI_WEB_VERIFY_USER=1` 时创建隔离普通测试账号，验收后停用；新凭据最终撤销。验证创建/复制/重新打开无明文/确认撤销、实际 API 查询、OAuth 换令牌、MCP 初始化及 21 工具发现，并验证用户权限降低、停用、伪造管理员范围、管理他人被拒绝，以及撤销关联令牌立即失效。
+
+脚本不保存 trace/HAR，不输出密钥或令牌，复制测试完成后清除测试剪贴板。可选 `AI_WEB_SCREENSHOT_DIR` 只保存关闭密钥界面后的桌面及 320px 截图；`AI_WEB_DIST_DIR` 用于检查构建产物未嵌入测试凭据。生产执行前确认测试账号/凭据写入已获授权，测试完成后检查清理结果。
+
+### 新运行环境的回滚与留存
+
+若切换后启动或验收失败，保持备份，不重复执行写操作。先停止服务，从本次备份的 `code.tar.gz` 恢复旧代码和前端产物；移除当前 `.venv` 链接（仅在确认其为符号链接时使用 `unlink`），将 `.venv-before-<本次构建号>` 恢复为 `.venv`，再启动并检查 ready、网页登录和业务查询。本次网页发布无数据库迁移，优先保留数据库；需要整库回退时先评估备份后新增数据，遵循前述回滚步骤。配置与密码文件不随代码覆盖。
+
+`.runtime-envs`、`.runtime-releases`、`.venv-before-*` 不自动删除，以保留可恢复版本。运维清理时先解析当前 `.venv` 和保留旧环境的链接目标，只清理未被当前/回滚环境引用的版本；建议至少保留当前及前一个成功版本、对应源码和备份。不要只删源码目录，因为 editable 环境依赖该目录。

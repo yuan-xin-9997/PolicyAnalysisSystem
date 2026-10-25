@@ -103,6 +103,9 @@ async function signOut(): Promise<void> {
           <span class="nav-dot" aria-hidden="true"></span>
           <span>{{ item.label }}</span>
         </RouterLink>
+        <RouterLink to="/settings/ai-access" @click="closeMobileNavigation">
+          <span class="nav-dot" aria-hidden="true"></span><span>AI 接入</span>
+        </RouterLink>
       </nav>
 
       <div class="account-panel">

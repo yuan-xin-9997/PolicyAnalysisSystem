@@ -50,6 +50,26 @@ pipeline {
             }
         }
 
+        stage('Prepare isolated runtime before downtime') {
+            options { timeout(time: 20, unit: 'MINUTES') }
+            steps {
+                sh '''
+                    set -eu
+                    DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
+                    RELEASE_DIR="${DEPLOY_DIR}/.runtime-releases/${BUILD_NUMBER}"
+                    RUNTIME_DIR="${DEPLOY_DIR}/.runtime-envs/${BUILD_NUMBER}"
+                    mkdir -p "${RELEASE_DIR}"
+                    rsync -a --delete \
+                        --exclude '.git/' --exclude '.venv/' --exclude 'node_modules/' \
+                        --exclude 'src/data/' --exclude 'src/logs/' --exclude 'service.env' \
+                        "${WORKSPACE}/" "${RELEASE_DIR}/"
+                    "${PYTHON_BIN}" -m venv "${RUNTIME_DIR}"
+                    "${RUNTIME_DIR}/bin/pip" install --timeout 30 --retries 5 -e "${RELEASE_DIR}"
+                    "${RUNTIME_DIR}/bin/pip" check
+                '''
+            }
+        }
+
         stage('Backup and check active tasks') {
             steps {
                 sh '''
@@ -82,7 +102,11 @@ pipeline {
 
                     rsync -a --delete \
                         --exclude '.git/' \
-                        --exclude '.venv/' \
+                        --exclude '.venv' \
+                        --exclude '.venv-before-*' \
+                        --exclude '.runtime-envs/' \
+                        --exclude '.runtime-releases/' \
+                        --exclude 'node_modules/' \
                         --exclude 'service.env' \
                         --exclude 'src/config/app.json' \
                         --exclude 'src/data/' \
@@ -106,7 +130,7 @@ EOF
             }
         }
 
-        stage('Install and build') {
+        stage('Activate prepared runtime and migrate') {
             options {
                 timeout(time: 20, unit: 'MINUTES')
             }
@@ -116,14 +140,10 @@ EOF
                     DEPLOY_DIR="${DEPLOY_ROOT}/${APP_NAME}"
                     cd "${DEPLOY_DIR}"
 
-                    if [ ! -d .venv ]; then
-                        "${PYTHON_BIN}" -m venv .venv
+                    if [ -e .venv ] || [ -L .venv ]; then
+                        mv .venv ".venv-before-${BUILD_NUMBER}"
                     fi
-                    .venv/bin/pip install --timeout 30 --retries 5 --upgrade pip
-                    .venv/bin/pip install --timeout 30 --retries 5 -e .
-
-                    npm --prefix src/app/frontend ci
-                    npm --prefix src/app/frontend run build
+                    ln -s "${DEPLOY_DIR}/.runtime-envs/${BUILD_NUMBER}" .venv
                     .venv/bin/python scripts/deployment.py migrate
                 '''
             }

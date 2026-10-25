@@ -24,6 +24,23 @@ SCOPES = {
     "analysis:write": "analysis",
 }
 ADMIN_SCOPES = {"tasks:write", "rules:write"}
+SCOPE_DESCRIPTIONS = {
+    "policies:read": ("查看政策", "检索政策标题、正文及筛选项。"),
+    "rules:read": ("查看来源和规则", "读取来源、类别及采集规则。"),
+    "rules:write": ("维护采集规则（管理员）", "新增或修改规则，启用定时可能触发后台采集。"),
+    "tasks:read": ("查看采集任务", "读取采集进度、结果、失败原因及日志。"),
+    "tasks:write": ("执行采集任务（管理员）", "创建或取消采集任务，会访问外部来源。"),
+    "analysis:read": ("查看分析结果", "读取词频、关键词关系、比对报告和分析日志。"),
+    "analysis:write": ("执行政策分析", "创建异步词频分析或政策比对任务。"),
+}
+
+
+def available_scopes(user):
+    return {
+        scope
+        for scope, page in SCOPES.items()
+        if page in user.page_permissions and (scope not in ADMIN_SCOPES or user.role == "admin")
+    }
 
 
 def now():
@@ -97,13 +114,14 @@ def resource_url(app) -> str:
 
 
 def create_credential(app, user, name, scopes, expires_at):
+    name = name.strip()
+    if not name:
+        raise denied(422, "INVALID_NAME")
     if not scopes or not set(scopes) <= SCOPES.keys():
         raise denied(422, "INVALID_SCOPE")
     if expires_at.tzinfo is None or not now() < expires_at <= now() + timedelta(days=365):
         raise denied(422, "INVALID_EXPIRY")
-    if any(
-        SCOPES[s] not in user.page_permissions or (s in ADMIN_SCOPES and user.role != "admin") for s in scopes
-    ):
+    if not set(scopes) <= available_scopes(user):
         raise denied(403, "INSUFFICIENT_SCOPE")
     secret = "pa_" + secrets.token_urlsafe(32)
     record = Credential(
@@ -133,12 +151,12 @@ def credential_public(record):
     }
 
 
-def audit(app, principal, operation, target, status_code):
+def audit(app, principal, operation, target, status_code, *, user=None):
     with app.state.database_sessions.begin() as db:
         db.add(
             AuditEvent(
                 credential_id=principal.credential_id if principal else None,
-                user_id=principal.user.id if principal else None,
+                user_id=principal.user.id if principal else (user.id if user else None),
                 operation=operation,
                 target=target[:512],
                 status_code=status_code,

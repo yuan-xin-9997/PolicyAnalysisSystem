@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import tarfile
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -59,6 +60,22 @@ def preflight(root, settings):
             shutil.copy2(path, destination)
             destination.chmod(0o600)
     (backup / "app.sqlite3").chmod(0o600)
+    with tarfile.open(backup / "code.tar.gz", "w:gz") as archive:
+        for relative in (
+            "src/app/backend",
+            "src/app/frontend/dist",
+            "migrations",
+            "scripts",
+            "pyproject.toml",
+        ):
+            path = root / relative
+            if path.exists():
+                archive.add(
+                    path,
+                    arcname=relative,
+                    filter=lambda member: None if "__pycache__" in member.name else member,
+                )
+    (backup / "code.tar.gz").chmod(0o600)
     return {"backup": str(backup), "database": str(settings.database.path), "active_tasks": 0}
 
 

@@ -4,6 +4,8 @@ PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策�
 
 ## AI API 与 MCP
 
+登录后从导航进入 **AI 接入**，或在系统配置页切换到该设置子页（`/settings/ai-access`）。所有已登录用户可创建和分页管理自己的凭据，选择本人拥有的权限和有效期；完整密钥仅创建后显示一次，支持复制及确认撤销。普通用户不能创建管理员范围的凭据，也不能管理他人凭据。页面展示当前部署环境地址、真实工具清单和客户端兼容说明，不需要手工提取 Cookie 或 CSRF Token。
+
 系统提供独立 Bearer 凭据访问现有 `/api/v1` 核心业务 API，并提供官方 Python MCP SDK 的 `/mcp/` Streamable HTTP 服务，共 21 个政策、采集及分析工具。MCP 使用 OAuth client_credentials 机器扩展及短期、绑定 resource 的令牌；网页登录和现有权限继续有效。
 
 完整地址、凭据创建/撤销、scope、OpenAPI、客户端示例、工具清单、限流/幂等/审计、部署备份与迁移回滚见 [AI 接入文档](docs/ai-integration.md)。实际开发、测试与部署状态见 [交付状态](docs/ai-delivery-status.md)。不声明支持尚未实现的交互式 OAuth 客户端。

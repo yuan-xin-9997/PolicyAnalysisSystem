@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { ApiError, apiRequest } from '../api/client'
+import SettingsTabs from '../components/SettingsTabs.vue'
 
 interface SettingsResponse {
   values: Record<string, unknown>
@@ -95,6 +96,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 <template>
   <section class="page-panel" aria-labelledby="settings-title">
+    <SettingsTabs />
     <header class="page-heading">
       <div>
         <span class="eyebrow">RUNTIME CONFIGURATION</span>

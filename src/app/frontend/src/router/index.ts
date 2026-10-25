@@ -10,6 +10,7 @@ import {
 import AppLayout from '../layouts/AppLayout.vue'
 import { useAuthStore, type PageCode } from '../stores/auth'
 import AnalysisView from '../views/analysis/AnalysisView.vue'
+import AiAccessView from '../views/AiAccessView.vue'
 import LoginView from '../views/LoginView.vue'
 import NoAccessView from '../views/NoAccessView.vue'
 import PlaceholderView from '../views/PlaceholderView.vue'
@@ -54,6 +55,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'analysis', name: 'analysis', component: AnalysisView, meta: { page: 'analysis' } },
       { path: 'users', name: 'users', component: UsersView, meta: { page: 'users' } },
       { path: 'settings', name: 'settings', component: SettingsView, meta: { page: 'settings' } },
+      { path: 'settings/ai-access', name: 'ai-access', component: AiAccessView },
       { path: 'no-access', name: 'no-access', component: NoAccessView },
     ],
   },

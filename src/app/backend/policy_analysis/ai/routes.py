@@ -4,19 +4,22 @@ import base64
 import json
 import secrets
 from datetime import datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qs, unquote
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from policy_analysis.ai.models import AuditEvent, Credential, OAuthAccess
 from policy_analysis.ai.service import (
+    SCOPE_DESCRIPTIONS,
     SCOPES,
     Principal,
     audit,
     authenticate,
+    available_scopes,
     create_credential,
     credential_public,
     denied,
@@ -52,6 +55,137 @@ class CredentialIssued(CredentialRead):
     secret: str = Field(description="仅本次返回；服务端仅存 SHA-256 摘要，请保存到受保护的凭据存储。")
 
 
+class ManagedCredential(CredentialRead):
+    status: str
+    effective_scopes: list[str]
+
+
+class CredentialPage(BaseModel):
+    items: list[ManagedCredential]
+    total: int
+    page: int
+    page_size: int
+
+
+class ScopeOption(BaseModel):
+    code: str
+    label: str
+    description: str
+    read_only: bool
+
+
+class ToolInfo(BaseModel):
+    name: str
+    description: str | None
+    annotations: dict[str, Any]
+
+
+class ClientInfo(BaseModel):
+    name: str
+    status: str
+    description: str
+
+
+class AccessInfo(BaseModel):
+    api_url: str
+    openapi_url: str
+    docs_url: str
+    mcp_url: str
+    token_url: str
+    issuer: str
+    scopes: list[ScopeOption]
+    tools: list[ToolInfo]
+    clients: list[ClientInfo]
+
+
+@router.get("/api/v1/ai-access", response_model=AccessInfo)
+async def access_info(
+    request: Request, response: Response, session: AuthenticatedSession = Depends(require_session)
+):
+    response.headers["Cache-Control"] = "no-store"
+    base = public_base(request.app)
+    tools = await request.app.state.mcp_server.list_tools()
+    return {
+        "api_url": base + "/api/v1",
+        "openapi_url": base + "/openapi.json",
+        "docs_url": base + "/docs",
+        "mcp_url": resource_url(request.app),
+        "token_url": base + "/oauth/token",
+        "issuer": base,
+        "scopes": [
+            {
+                "code": scope,
+                "label": SCOPE_DESCRIPTIONS[scope][0],
+                "description": SCOPE_DESCRIPTIONS[scope][1],
+                "read_only": scope.endswith(":read"),
+            }
+            for scope in sorted(available_scopes(session.user))
+        ],
+        "tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "annotations": tool.annotations.model_dump() if tool.annotations else {},
+            }
+            for tool in tools
+        ],
+        "clients": [
+            {
+                "name": "官方 Python MCP SDK",
+                "status": "已实测",
+                "description": "ClientCredentialsOAuthProvider 自动发现、获取及续取短期令牌。",
+            },
+            {
+                "name": "支持 Bearer 头的 Streamable HTTP 客户端",
+                "status": "协议适配，未逐一实测",
+                "description": "由客户端安全获取和续取 OAuth 短期令牌；不能直接使用普通 API Key。",
+            },
+            {
+                "name": "要求交互式 OAuth/PKCE 的客户端",
+                "status": "尚不支持",
+                "description": (
+                    "当前不提供 authorization_code/PKCE 或动态客户端注册，"
+                    "不承诺全部 ChatGPT/Claude/Cursor 连接方式。"
+                ),
+            },
+        ],
+    }
+
+
+@router.get("/api/v1/ai-access/credentials", response_model=CredentialPage)
+def credential_page(
+    request: Request,
+    response: Response,
+    session: AuthenticatedSession = Depends(require_session),
+    page: int = Query(1, ge=1, le=1000000),
+    page_size: int = Query(10, ge=1, le=100),
+):
+    response.headers["Cache-Control"] = "no-store"
+    with request.app.state.database_sessions() as db:
+        total = db.scalar(
+            select(func.count()).select_from(Credential).where(Credential.user_id == session.user.id)
+        )
+        rows = db.scalars(
+            select(Credential)
+            .where(Credential.user_id == session.user.id)
+            .order_by(Credential.created_at.desc(), Credential.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        allowed = available_scopes(session.user)
+        items = [
+            {
+                **credential_public(row),
+                "status": "revoked"
+                if row.revoked_at
+                else ("expired" if row.expires_at <= now() else "active"),
+                "effective_scopes": sorted(set(json.loads(row.scopes_json)) & allowed),
+            }
+            for row in rows
+        ]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 @router.post("/api/v1/credentials", status_code=201, response_model=CredentialIssued)
 def issue_credential(
     body: CredentialCreate,
@@ -66,10 +200,12 @@ def issue_credential(
 @router.get("/api/v1/credentials", response_model=list[CredentialRead])
 def list_credentials(
     request: Request,
+    response: Response,
     session: AuthenticatedSession = Depends(require_session),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
 ):
+    response.headers["Cache-Control"] = "no-store"
     with request.app.state.database_sessions() as db:
         rows = db.scalars(
             select(Credential)

@@ -19,7 +19,9 @@ def require_session(
     principal = getattr(request.state, "machine_principal", None)
     if principal is not None:
         return AuthenticatedSession(id=0, user=principal.user, csrf_token_hash="")
-    return service.authenticate_session(session_token)
+    session = service.authenticate_session(session_token)
+    request.state.authenticated_user = session.user
+    return session
 
 
 def require_user(session: AuthenticatedSession = Depends(require_session)) -> PublicUser:

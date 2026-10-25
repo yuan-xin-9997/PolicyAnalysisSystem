@@ -222,6 +222,9 @@ __marimo__/
 
 # Project-local dependencies and generated output
 .venv/
+.runtime-envs/
+.runtime-releases/
+.venv-before-*
 node_modules/
 src/app/frontend/dist/
 src/app/frontend/test-results/
