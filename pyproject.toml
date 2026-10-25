@@ -37,6 +37,7 @@ where = ["src/app/backend"]
 "policy_analysis.collectors.resources" = ["*.json"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["src/tests/backend"]
 addopts = "-ra"
 filterwarnings = [
