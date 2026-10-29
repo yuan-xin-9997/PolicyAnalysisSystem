@@ -64,7 +64,8 @@ class DiscoveryConfig(StrictModel):
 class CollectionRuleCreate(StrictModel):
     name: TrimmedName
     source_code: TrimmedCode
-    category_code: TrimmedCode
+    category_code: TrimmedCode | None = None
+    category_name: TrimmedName | None = None
     include_keywords: list[Keyword] = Field(min_length=1, max_length=64)
     exclude_keywords: list[Keyword] = Field(default_factory=list, max_length=64)
     history_years: int = Field(default=5, ge=1, le=20)
@@ -73,6 +74,12 @@ class CollectionRuleCreate(StrictModel):
     trigger_mode: Literal["manual", "schedule"] = "manual"
     cron_expression: str | None = Field(default=None, max_length=128)
     schedule_enabled: bool = False
+
+    @model_validator(mode="after")
+    def require_category_selection(self) -> CollectionRuleCreate:
+        if (self.category_code is None) == (self.category_name is None):
+            raise ValueError("请选择已有类别或填写新类别名称，二者只能提供一个")
+        return self
 
     @field_validator("include_keywords", "exclude_keywords")
     @classmethod
@@ -84,6 +91,7 @@ class CollectionRuleUpdate(StrictModel):
     name: TrimmedName | None = None
     source_code: TrimmedCode | None = None
     category_code: TrimmedCode | None = None
+    category_name: TrimmedName | None = None
     include_keywords: list[Keyword] | None = Field(default=None, min_length=1, max_length=64)
     exclude_keywords: list[Keyword] | None = Field(default=None, max_length=64)
     history_years: int | None = Field(default=None, ge=1, le=20)
@@ -105,6 +113,8 @@ class CollectionRuleUpdate(StrictModel):
 
     @model_validator(mode="after")
     def reject_explicit_nulls(self) -> CollectionRuleUpdate:
+        if self.category_code is not None and self.category_name is not None:
+            raise ValueError("已有类别与新类别名称不能同时提供")
         if any(getattr(self, field_name) is None for field_name in self.model_fields_set):
             raise ValueError("PATCH 字段不得为 null")
         return self

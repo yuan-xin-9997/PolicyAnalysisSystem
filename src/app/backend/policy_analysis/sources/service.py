@@ -58,7 +58,7 @@ class SourceService:
             with self._sessions.begin() as session:
                 repository = SourceRepository(session)
                 source = _require_source(repository, payload.source_code)
-                category = _require_category(repository, payload.category_code)
+                category = _resolve_category(repository, payload)
                 _validate_rule_bindings(source, category, is_active=payload.is_active)
                 _validate_discovery_domains(payload.discovery, source)
                 cron_expression, next_run_at = _resolve_trigger_config(
@@ -135,7 +135,11 @@ class SourceService:
                         {
                             "name": values.get("name", rule.name),
                             "source_code": values.get("source_code", rule.source.code),
-                            "category_code": values.get("category_code", rule.category.code),
+                            **(
+                                {"category_name": values["category_name"]}
+                                if "category_name" in values
+                                else {"category_code": values.get("category_code", rule.category.code)}
+                            ),
                             "include_keywords": include_keywords,
                             "exclude_keywords": exclude_keywords,
                             "history_years": values.get("history_years", rule.history_years),
@@ -146,7 +150,7 @@ class SourceService:
                 except ValidationError:
                     raise _configuration_error("RULE_CONFIGURATION_INVALID") from None
                 source = _require_source(repository, merged.source_code)
-                category = _require_category(repository, merged.category_code)
+                category = _resolve_category(repository, merged)
                 _validate_rule_bindings(source, category, is_active=merged.is_active)
                 _validate_discovery_domains(merged.discovery, source)
 
@@ -290,6 +294,14 @@ def _require_category(repository: SourceRepository, code: str) -> PolicyCategory
     if category is None:
         raise _not_found("CATEGORY_NOT_FOUND", "政策类别不存在。")
     return category
+
+
+def _resolve_category(repository: SourceRepository, payload: CollectionRuleCreate) -> PolicyCategory:
+    if payload.category_code is not None:
+        return _require_category(repository, payload.category_code)
+    name = payload.category_name
+    assert name is not None  # Validated by CollectionRuleCreate.
+    return repository.get_or_add_category(name)
 
 
 def _validate_rule_bindings(

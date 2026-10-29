@@ -43,6 +43,9 @@ async function loadAll(): Promise<void> {
 }
 
 function upsertRule(rule: CollectionRule): void {
+  if (!categories.value.some((category) => category.code === rule.category.code)) {
+    categories.value.push(rule.category)
+  }
   const index = rules.value.findIndex((item) => item.id === rule.id)
   if (index >= 0) rules.value[index] = rule
   else rules.value = [rule, ...rules.value]

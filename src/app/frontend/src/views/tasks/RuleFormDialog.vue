@@ -18,6 +18,7 @@ const form = reactive({
   name: '',
   sourceCode: '',
   categoryCode: '',
+  categoryName: '',
   includeKeywords: '',
   excludeKeywords: '',
   rssUrls: '',
@@ -32,13 +33,14 @@ const saving = ref(false)
 const errorMessage = ref('')
 const validationMessage = ref('')
 
-const canSave = computed(() => props.sources.length > 0 && props.categories.length > 0)
+const canSave = computed(() => props.sources.length > 0)
 
 watch(
   () => props.rule,
   (rule) => {
     validationMessage.value = ''
     errorMessage.value = ''
+    form.categoryName = ''
     if (rule) {
       form.name = rule.name
       form.sourceCode = rule.source.code
@@ -90,6 +92,10 @@ async function saveRule(): Promise<void> {
     validationMessage.value = '请填写名称、来源、类别和至少一个包含词。'
     return
   }
+  if (form.categoryCode === '__new__' && !form.categoryName.trim()) {
+    validationMessage.value = '请填写新类别名称。'
+    return
+  }
   if (form.historyYears < 1 || form.historyYears > 20) {
     validationMessage.value = '历史窗口必须在 1 到 20 年之间。'
     return
@@ -111,7 +117,9 @@ async function saveRule(): Promise<void> {
   const body: Record<string, unknown> = {
     name: form.name.trim(),
     source_code: form.sourceCode,
-    category_code: form.categoryCode,
+    ...(form.categoryCode === '__new__'
+      ? { category_name: form.categoryName.trim() }
+      : { category_code: form.categoryCode }),
     include_keywords: includeKeywords,
     exclude_keywords: excludeKeywords,
     history_years: form.historyYears,
@@ -168,8 +176,14 @@ async function saveRule(): Promise<void> {
       <select v-model="form.categoryCode" name="category_code">
         <option value="">请选择</option>
         <option v-for="category in categories" :key="category.code" :value="category.code">{{ category.name }}</option>
+        <option value="__new__">新建类别…</option>
       </select>
     </label>
+    <label v-if="form.categoryCode === '__new__'">
+      新类别名称
+      <input v-model="form.categoryName" name="category_name" maxlength="256" placeholder="例如：中央委员会全会" />
+    </label>
+    <p class="field-hint">类别用于文章归档；没有合适的类别时可新建。采集范围由包含词和排除词控制。</p>
     <label>
       包含词
       <textarea v-model="form.includeKeywords" name="include_keywords" placeholder="用逗号或换行分隔"></textarea>

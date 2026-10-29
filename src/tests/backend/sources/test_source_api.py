@@ -52,6 +52,54 @@ def rule_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def test_custom_category_created_reused_and_editable(admin_client: TestClient) -> None:
+    payload = rule_payload(category_name=" 中央委员会全会 ")
+    del payload["category_code"]
+    created = admin_client.post("/api/v1/collection-rules", json=payload, headers=csrf(admin_client))
+    assert created.status_code == 201
+    category = created.json()["category"]
+    assert category["name"] == "中央委员会全会"
+    repeated = admin_client.post("/api/v1/collection-rules", json=payload, headers=csrf(admin_client))
+    assert repeated.status_code == 201
+    assert repeated.json()["category"] == category
+    updated = admin_client.patch(
+        f"/api/v1/collection-rules/{created.json()['id']}",
+        json={"category_name": "中央经济工作会议"},
+        headers=csrf(admin_client),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["category"]["name"] == "中央经济工作会议"
+    categories = admin_client.get("/api/v1/policy-categories").json()
+    assert sum(item["name"] == "中央委员会全会" for item in categories) == 1
+
+
+def test_failed_rule_does_not_leave_custom_category(admin_client: TestClient) -> None:
+    payload = rule_payload(category_name="不应保存", trigger_mode="schedule", cron_expression="invalid")
+    del payload["category_code"]
+    response = admin_client.post("/api/v1/collection-rules", json=payload, headers=csrf(admin_client))
+    assert response.status_code == 422
+    assert all(item["name"] != "不应保存" for item in admin_client.get("/api/v1/policy-categories").json())
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {},
+        {"category_name": " "},
+        {"category_name": "x" * 257},
+        {"category_code": "politburo_meeting", "category_name": "全会"},
+    ],
+)
+def test_invalid_category_selection(admin_client: TestClient, selection: dict[str, str]) -> None:
+    payload = rule_payload()
+    del payload["category_code"]
+    payload.update(selection)
+    assert (
+        admin_client.post("/api/v1/collection-rules", json=payload, headers=csrf(admin_client)).status_code
+        == 422
+    )
+
+
 def test_admin_can_read_and_manage_rules_and_trigger_modes(admin_client: TestClient) -> None:
     class FakeScheduler:
         is_started = True

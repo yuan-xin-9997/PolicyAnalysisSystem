@@ -60,6 +60,27 @@ function fillBaseFields() {
 describe('采集规则', () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it('支持新建类别，保存后可在下拉框复用', async () => {
+    const customCategory = { ...category, id: 2, code: 'custom_plenum', name: '中央委员会全会' }
+    const fetchMock = vi.fn().mockImplementation((path: string, options?: RequestInit) => {
+      if (path.endsWith('/collection-rules') && options?.method === 'POST') return Promise.resolve(jsonResponse({ ...rule, category: customCategory }, 201))
+      if (path.endsWith('/collection-rules')) return Promise.resolve(jsonResponse([]))
+      if (path.endsWith('/sources')) return Promise.resolve(jsonResponse([source]))
+      return Promise.resolve(jsonResponse([]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderRules()
+    await screen.findByText('新增采集规则')
+    fillBaseFields()
+    await fireEvent.update(screen.getByLabelText('类别'), '__new__')
+    await fireEvent.update(screen.getByLabelText('新类别名称'), ' 中央委员会全会 ')
+    await fireEvent.click(screen.getByRole('button', { name: '保存规则' }))
+    await screen.findByRole('option', { name: '中央委员会全会' })
+    const body = JSON.parse(fetchMock.mock.calls.find(([path, options]) => path.endsWith('/collection-rules') && options?.method === 'POST')?.[1]?.body as string)
+    expect(body.category_name).toBe('中央委员会全会')
+    expect(body).not.toHaveProperty('category_code')
+  })
+
   it('新增手工规则时清理空白和重复词，并提交完整 JSON', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string, options?: RequestInit) => {
       if (path.endsWith('/collection-rules') && options?.method === 'POST') return Promise.resolve(jsonResponse(rule, 201))

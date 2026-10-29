@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from hashlib import sha256
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -25,6 +26,18 @@ class SourceRepository:
 
     def get_category_by_code(self, code: str) -> PolicyCategory | None:
         return self._session.scalar(select(PolicyCategory).where(PolicyCategory.code == code))
+
+    def get_or_add_category(self, name: str) -> PolicyCategory:
+        category = self._session.scalar(
+            select(PolicyCategory).where(PolicyCategory.name == name).order_by(PolicyCategory.id)
+        )
+        if category is None:
+            # Stable code prevents concurrent requests from creating duplicate custom categories.
+            code = "custom_" + sha256(name.encode("utf-8")).hexdigest()[:56]
+            category = PolicyCategory(code=code, name=name, is_active=True)
+            self._session.add(category)
+            self._session.flush()
+        return category
 
     def list_sources(self) -> list[Source]:
         statement = select(Source).order_by(Source.code, Source.id)

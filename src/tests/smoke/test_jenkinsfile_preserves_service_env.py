@@ -37,5 +37,6 @@ def test_jenkinsfile_verifies_backend_and_frontend_before_stopping_service() -> 
 def test_jenkinsfile_preserves_deployed_application_configuration() -> None:
     jenkinsfile = (PROJECT_ROOT / "src/JenkinsConfig/Jenkinsfile").read_text(encoding="utf-8")
 
-    assert 'cp "${DEPLOY_DIR}/src/config/app.json" /tmp/policy-analysis-app.json' in jenkinsfile
-    assert 'mv /tmp/policy-analysis-app.json "${DEPLOY_DIR}/src/config/app.json"' in jenkinsfile
+    assert "--exclude 'src/config/app.json'" in jenkinsfile
+    assert 'if [ ! -f "${DEPLOY_DIR}/src/config/app.json" ]; then' in jenkinsfile
+    assert 'cp "${WORKSPACE}/src/config/app.json" "${DEPLOY_DIR}/src/config/app.json"' in jenkinsfile
