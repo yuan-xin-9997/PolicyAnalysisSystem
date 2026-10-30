@@ -236,3 +236,14 @@ src/logs/
 
 # Claude Code local config (user-level skills/commands)
 .claude/
+
+# Local credentials and runtime databases (keep sample/document files trackable)
+/src/data/password.txt
+/src/data/.password.txt.lock
+/src/data/app.sqlite3*
+/demo-data/password.txt
+/demo-data/.password.txt.lock
+/demo-data/app.sqlite3*
+
+# Deployment-only environment secrets
+/service.env

@@ -13,7 +13,10 @@ from policy_analysis.sources.models import PolicyCategory, Source
 from sqlalchemy import select
 
 
-def test_real_sdk_oauth_tools_and_async_task(tmp_path):
+def test_real_sdk_oauth_tools_and_async_task(tmp_path, monkeypatch):
+    # Local SDK traffic must stay offline even when the host exports a proxy.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     # A real TCP listener, isolated migrated database and official SDK client.
     from scripts.verify_ai_access import verify
 

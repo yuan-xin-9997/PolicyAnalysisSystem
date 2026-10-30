@@ -320,7 +320,7 @@ describe('政策列表', () => {
     await waitFor(() => expect(router.currentRoute.value.name).toBe('analysis'))
   })
 
-  it('选择两篇政策并创建政策比对任务', async () => {
+  it('选择两篇政策并创建文本特征比较任务', async () => {
     const first = policyPage().items[0]
     const page = policyPage({
       items: [first, { ...first, id: 8, title: '人工智能安全治理规划', canonical_url: 'https://news.cn/example/d.html' }],
@@ -346,10 +346,10 @@ describe('政策列表', () => {
     render(PolicyListView, { global: { plugins: [router] } })
 
     await screen.findByText('人工智能安全治理规划')
-    expect(screen.getByRole('button', { name: '政策比对' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '文本特征比较' })).toBeDisabled()
     await fireEvent.click(screen.getByLabelText('选择 中共中央政治局召开会议'))
     await fireEvent.click(screen.getByLabelText('选择 人工智能安全治理规划'))
-    await fireEvent.click(screen.getByRole('button', { name: /政策比对/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /文本特征比较/ }))
     await waitFor(() =>
       expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/analysis/comparison-tasks'))).toBe(true),
     )

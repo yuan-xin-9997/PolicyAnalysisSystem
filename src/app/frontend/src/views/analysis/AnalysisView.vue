@@ -151,7 +151,7 @@ function statusText(status: string): string {
 }
 
 function taskTypeText(taskType: string): string {
-  return taskType === 'policy_comparison' ? '政策比对' : '分词分析'
+  return taskType === 'policy_comparison' ? '文本特征比较' : '分词分析'
 }
 
 function policyTitle(id: number): string {
@@ -264,7 +264,8 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
       </div>
 
       <article v-if="task.status === 'succeeded' && comparison" class="comparison-report">
-        <h2>政策差异分析报告</h2>
+        <h2>文本特征比较报告</h2>
+        <p class="state-card">输入为所选政策的已入库正文；输出为分词词频、关键词集合及余弦相似度。结果用于辅助阅读，不判断法律效力、条款冲突或版本替代关系；请打开政策详情核实正文和原文链接。</p>
         <p class="state-card">{{ comparison.summary }}</p>
 
         <section>
@@ -274,7 +275,7 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
             <thead><tr><th>政策</th><th>发布部门</th><th>发布时间</th><th>核心关键词</th></tr></thead>
             <tbody>
               <tr v-for="policy in comparison.policies" :key="policy.id">
-                <td>{{ policy.title }}</td>
+                <td><RouterLink :to="`/policies/${policy.id}`">{{ policy.title }}（正文与原文入口）</RouterLink></td>
                 <td>{{ policy.publisher }}</td>
                 <td>{{ formatBeijingTime(policy.published_at) }}</td>
                 <td>{{ policy.top_keywords.join('、') || '无' }}</td>
@@ -285,18 +286,18 @@ async function sortWords(by: 'frequency' | 'tfidf'): Promise<void> {
         </section>
 
         <section>
-          <h3>共同关注点</h3>
+          <h3>共同关键词</h3>
           <p>{{ comparison.common_keywords.join('、') || '未发现全部政策共同出现的显著关键词。' }}</p>
         </section>
 
         <section>
-          <h3>两两差异</h3>
+          <h3>两两文本特征</h3>
           <div v-for="pair in comparison.pair_differences" :key="`${pair.left_policy_id}-${pair.right_policy_id}`" class="state-card">
             <h4>{{ policyTitle(pair.left_policy_id) }} vs {{ policyTitle(pair.right_policy_id) }}</h4>
             <p>文本特征相似度：{{ (pair.similarity * 100).toFixed(1) }}%</p>
-            <p><strong>共同重点：</strong>{{ pair.shared_keywords.join('、') || '无' }}</p>
-            <p><strong>前者独有重点：</strong>{{ pair.left_only_keywords.join('、') || '无' }}</p>
-            <p><strong>后者独有重点：</strong>{{ pair.right_only_keywords.join('、') || '无' }}</p>
+            <p><strong>共同关键词：</strong>{{ pair.shared_keywords.join('、') || '无' }}</p>
+            <p><strong>前者独有关键词：</strong>{{ pair.left_only_keywords.join('、') || '无' }}</p>
+            <p><strong>后者独有关键词：</strong>{{ pair.right_only_keywords.join('、') || '无' }}</p>
           </div>
         </section>
       </article>

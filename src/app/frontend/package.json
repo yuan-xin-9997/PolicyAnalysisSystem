@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "type-check": "vue-tsc -b",
-    "lint": "cd ../.. && app/frontend/node_modules/.bin/eslint --config app/frontend/eslint.config.js app/frontend/src tests/frontend app/frontend/e2e app/frontend/vite.config.ts app/frontend/vitest.config.ts app/frontend/playwright.config.ts",
+    "lint": "cd ../.. && node app/frontend/node_modules/eslint/bin/eslint.js --config app/frontend/eslint.config.js app/frontend/src tests/frontend app/frontend/e2e app/frontend/vite.config.ts app/frontend/vitest.config.ts app/frontend/playwright.config.ts",
     "test": "vitest",
     "test:e2e": "playwright test"
   },

@@ -109,3 +109,17 @@ def test_compute_cooccurrence_normalizes_word_order() -> None:
 
 def test_compute_cooccurrence_empty_top_words_returns_empty() -> None:
     assert engine.compute_cooccurrence([["人工智能", "产业"]], []) == []
+
+
+@pytest.mark.parametrize(("body", "expected"), [("", 0.0), ("教育 科技", 1.0)])
+def test_identical_text_comparison_boundary(body: str, expected: float) -> None:
+    policies = [
+        {"id": i, "title": str(i), "publisher": "样本", "published_at": None, "content_text": body}
+        for i in (1, 2)
+    ]
+    report = engine.build_comparison_report(policies)
+    assert report["pair_differences"][0]["similarity"] == expected
+
+
+def test_short_chinese_words_are_preserved() -> None:
+    assert "教育" in engine.analyze_text("教育", min_word_length=2)

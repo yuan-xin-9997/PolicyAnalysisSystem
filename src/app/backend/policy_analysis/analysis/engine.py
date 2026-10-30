@@ -90,7 +90,7 @@ def build_comparison_report(
     similarities = [float(pair["similarity"]) for pair in pairs]
     average = sum(similarities) / len(similarities) if similarities else 0.0
     summary = (
-        f"本报告比对 {len(analyzed)} 篇政策，共识关键词 {len(common)} 个，"
+        f"本报告比对 {len(analyzed)} 篇政策，共同关键词 {len(common)} 个，"
         f"两两文本特征平均相似度为 {average:.1%}。"
     )
     return {

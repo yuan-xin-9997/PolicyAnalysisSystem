@@ -1,7 +1,7 @@
 # policy-analysis Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-09-policy-word-frequency-analysis. Update Purpose after archive.
+为已入库政策提供可追溯的分词统计和文本特征比较，辅助阅读与检索。
 ## Requirements
 ### Requirement: 政策多选与分词分析任务创建
 系统 SHALL 允许具有政策分析页面权限的用户在政策列表中勾选一篇或多篇政策，并 SHALL 提供「分词分析」操作创建分析任务；创建接口 SHALL 校验 CSRF 与政策分析页面权限，并 SHALL 限制单次任务政策数量不超过配置上限。
@@ -120,3 +120,22 @@ TBD - created by archiving change 2026-08-09-policy-word-frequency-analysis. Upd
 - **WHEN** 用户选择 N 篇政策且 N 大于 2
 - **THEN** 系统生成 N×(N−1)/2 组两两差异，不遗漏任意政策组合
 
+
+
+### Requirement: 文本特征比较能力边界与追溯
+系统 SHALL 将至少两篇不同政策的已入库正文作为比较输入，输出共同及各自独有关键词与余弦相似度；页面 SHALL 明确称为「文本特征比较」，不得将关键词差异表述为法律效力、条款冲突或版本替代判断。
+
+#### Scenario: 查看比较报告
+- **WHEN** 用户查看已完成的比较任务
+- **THEN** 页面说明输入、输出与能力边界，并为每篇政策提供政策详情链接，用户可继续查看正文与原文链接核验上下文
+
+#### Scenario: 关键词解释
+- **WHEN** 报告展示独有关键词
+- **THEN** 文案称为独有关键词，不暗示另一篇政策没有相关条款
+
+### Requirement: 独立离线演示
+系统 SHALL 提供 `python -m policy_analysis.demo --data-dir <目录>`，将三份原创 MIT 授权虚构正文初始化到指定独立数据库，并准备独立密码文件；重复执行 SHALL 幂等且不重置现有账号，命令不得输出口令。
+
+#### Scenario: 无外部服务体验
+- **WHEN** 使用者按 README 指定演示数据库与密码文件路径启动
+- **THEN** 可在无 WebFetch 或大模型密钥的情况下登录、检索样本、分词并比较文本特征

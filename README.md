@@ -1,112 +1,97 @@
 # PolicyAnalysisSystem
 
-PolicyAnalysisSystem 是一个使用 FastAPI、Vue 3 和 SQLite 构建的政策采集与分析系统。当前后端已完成登录、权限、配置展示、来源规则、采集任务、WebFetch 抓取、政策去重入库、全文检索和任务调度能力。
+使用 FastAPI、Vue 3 和 SQLite 的政策采集与文本分析工具。适合集中整理公开政策正文、按标题与全文检索、观察词频及比较不同文本的关键词特征。支持登录、页面权限、系统配置、任务日志，以及可选的 WebFetch 采集和 AI API / MCP 接入。
 
-## AI API 与 MCP
+## 页面与用途
 
-登录后从导航进入 **AI 接入**，或在系统配置页切换到该设置子页（`/settings/ai-access`）。所有已登录用户可创建和分页管理自己的凭据，选择本人拥有的权限和有效期；完整密钥仅创建后显示一次，支持复制及确认撤销。普通用户不能创建管理员范围的凭据，也不能管理他人凭据。页面展示当前部署环境地址、真实工具清单和客户端兼容说明，不需要手工提取 Cookie 或 CSRF Token。
+| 页面 | 输入与输出 |
+| --- | --- |
+| 政策数据库 | 按标题、全文、部门、类别、来源和时间筛选；查看纯文本正文及原文链接 |
+| 政策分析 | 选择正文，生成词频、TF-IDF、词云、关键词关系图及文本特征比较 |
+| 任务中心 | 创建或查看采集任务、运行状态、逐篇处理结果和日志 |
+| 权限管理 / 系统配置 | 管理可登录用户、可见页面，查看当前配置与 WebFetch 状态 |
+| AI 接入 | 管理个人 API / MCP 凭据；见 [接入说明](docs/ai-integration.md) |
 
-系统提供独立 Bearer 凭据访问现有 `/api/v1` 核心业务 API，并提供官方 Python MCP SDK 的 `/mcp/` Streamable HTTP 服务，共 21 个政策、采集及分析工具。MCP 使用 OAuth client_credentials 机器扩展及短期、绑定 resource 的令牌；网页登录和现有权限继续有效。
+![离线样本检索页面](docs/images/policy-demo.png)
 
-完整地址、凭据创建/撤销、scope、OpenAPI、客户端示例、工具清单、限流/幂等/审计、部署备份与迁移回滚见 [AI 接入文档](docs/ai-integration.md)。实际开发、测试与部署状态见 [交付状态](docs/ai-delivery-status.md)。不声明支持尚未实现的交互式 OAuth 客户端。
+![文本特征比较报告](docs/images/comparison-demo.png)
 
-## 本地开发
+## 最短本地体验（离线样本）
 
-### 前置条件
+需要 Python 3.12、Node.js `^20.19.0 || >=22.12.0` 和 npm。在仓库根目录执行；不需要 WebFetch 或大模型密钥。三份演示正文为原创 MIT 授权的虚构文本，不是真实政策。
 
-- Python 3.12
-- Node.js `^20.19.0 || >=22.12.0`
-- npm（随 Node.js 安装）
-
-在仓库根目录创建后端虚拟环境并安装开发依赖：
+Linux / macOS：
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-```
-
-安装前端锁定依赖：
-
-```bash
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
 npm --prefix src/app/frontend ci
-```
-
-### 配置
-
-[`src/config/app.json`](src/config/app.json) 只保存无密钥配置。配置优先级从高到低为：
-
-1. `POLICY_ANALYSIS_` 前缀的环境变量；
-2. `src/config/app.json`；
-3. 代码中的非环境默认值。
-
-嵌套配置使用双下划线分隔。例如，以下命令只展示虚构占位符，运行时应替换为本机密钥，并且不得把真实值提交到版本库：
-
-```bash
-export POLICY_ANALYSIS_AUTH__SESSION_SECRET='replace-with-a-long-random-session-secret'
-export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://127.0.0.1:33333'
-export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
-```
-
-数据库文件和密码文件默认使用项目内相对路径。服务器端口在 `src/config/app.json` 中配置为 `30080`。
-
-### 首次准备登录账号
-
-首次本地运行前创建 `src/data/password.txt`，每行格式为：
-
-```text
-username:password:role
-```
-
-`role` 只能是 `admin` 或 `user`。首次部署允许使用项目约定的默认管理员：
-
-```text
-# 仅用于首次部署；首次登录后必须立即修改密码
-admin:admin123:admin
-```
-
-先创建 `src/data` 目录，并确保 `password.txt` 只允许当前用户读写。在 Linux 或 macOS 上可以执行：
-
-```bash
-mkdir -p src/data
-touch src/data/password.txt
-chmod 600 src/data/password.txt
-```
-
-把上面的默认内容写入新文件后即可首次登录。不要把生产账号、生产密码或任何服务密钥写入 README、配置文件或提交记录。
-
-### 启动与访问
-
-先构建前端，再从仓库根目录启动后端；FastAPI 会提供已构建的单页应用：
-
-```bash
 npm --prefix src/app/frontend run build
-.venv/bin/uvicorn policy_analysis.main:app --app-dir src/app/backend --host 127.0.0.1 --port 30080
+python -m policy_analysis.demo --data-dir ./demo-data
+export POLICY_ANALYSIS_DATABASE__PATH="$PWD/demo-data/app.sqlite3"
+export POLICY_ANALYSIS_AUTH__PASSWORD_FILE="$PWD/demo-data/password.txt"
+uvicorn policy_analysis.main:app --host 127.0.0.1 --port 30080
 ```
 
-本地访问地址：
+Windows PowerShell：
 
-- 系统页面：<http://127.0.0.1:30080/>
-- 存活检查：<http://127.0.0.1:30080/health/live>
-- 就绪检查：<http://127.0.0.1:30080/health/ready>
-
-系统页面支持宽度 320px 及以上的现代 Chrome、Edge、Safari 和 Firefox 浏览器。手机和平板端通过页面顶部的菜单按钮打开导航抽屉；政策、任务、规则和分析结果等宽表格可在表格区域内左右滑动，不会带动整个页面横向滚动。桌面端继续使用左侧导航栏。
-
-线上由 `policy-analysis.service` 统一管理进程并读取部署目录的 `service.env`。Jenkins 在验证通过后通过 systemctl 停服、更新、启动，并检查服务状态与就绪接口；不再单独启动 uvicorn。Jenkins 用户需获准免密执行该服务的 start/stop 命令。部署保留线上 `src/config/app.json`、`service.env` 和数据库。运维使用 `systemctl status policy-analysis` 查看状态、`journalctl -u policy-analysis` 查看日志。
-
-## 平台阶段验证
-
-从仓库根目录运行后端测试、静态检查和格式检查：
-
-```bash
-.venv/bin/pytest src/tests/backend/test_platform_smoke.py -v
-.venv/bin/ruff check src/app/backend src/tests/backend
-.venv/bin/ruff format --check src/app/backend src/tests/backend
-.venv/bin/pytest --cov=policy_analysis --cov-report=term-missing --cov-fail-under=80 src/tests/backend -q
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e '.[dev]'
+npm --prefix src/app/frontend ci
+npm --prefix src/app/frontend run build
+.\.venv\Scripts\python.exe -m policy_analysis.demo --data-dir .\demo-data
+$env:POLICY_ANALYSIS_DATABASE__PATH = Join-Path $PWD 'demo-data/app.sqlite3'
+$env:POLICY_ANALYSIS_AUTH__PASSWORD_FILE = Join-Path $PWD 'demo-data/password.txt'
+.\.venv\Scripts\python.exe -m uvicorn policy_analysis.main:app --host 127.0.0.1 --port 30080
 ```
 
-运行前端类型检查、静态检查、单元测试和生产构建：
+打开 [本地页面](http://127.0.0.1:30080/)，用 `admin` 及 `demo-data/password.txt` 中本地生成的口令登录。请在本地编辑器中查看该文件并妥善保管，不要提交或分享。演示初始化只操作指定目录，重复运行不会重复导入样本，也不会重置已有账号。选择样本后点击「分词分析」或选择至少两篇后点击「文本特征比较」，从任务完成后的报告进入正文与原文入口。
+
+## 文本特征比较的边界
+
+输入是所选政策的已入库正文；输出包括分词词频、关键词集合、共同与各自独有关键词，以及两两余弦相似度。相同且含有效词的正文相似度为 1；空正文没有有效词，余弦相似度为 0。默认保留至少两个字符的词。
+
+这些结果辅助定位阅读重点，不判断法律效力、条款冲突或版本替代关系。关键词未出现不代表相关条款不存在。请从报告中的政策详情查看正文、来源和原文链接，核实上下文；虚构样本的链接仅用于演示。文号、效力状态和版本对齐属于后续研究需求，未知字段不得推断。
+
+## 配置与真实采集
+
+[`src/config/app.json`](src/config/app.json) 保存无密钥配置；优先级为 `POLICY_ANALYSIS_` 环境变量 > JSON > 代码默认值。嵌套字段以 `__` 分隔。数据库和密码文件默认为 `src/data/app.sqlite3`、`src/data/password.txt`；JSON 中的服务端口为 `30080`，直接运行 uvicorn 时以命令行端口为准。真实使用可先取消演示路径环境变量，再执行 `python scripts/initialize_admin.py`，按当前配置生成私有管理员密码文件；已有文件会保留。请在本地读取随机口令，不要复用公开口令。
+
+初始化脚本会读取 `service.env`，同名进程环境变量优先。可通过 `POLICY_ANALYSIS_INITIAL_ADMIN_PASSWORD` 显式设置初始口令；不设置时随机生成。该变量只供初始化使用，不出现在系统配置展示中。既有账号不会被重置。
+
+采集才需要独立部署的 WebFetch v1 服务。Linux 示例（仅占位符）：
 
 ```bash
+export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://127.0.0.1:33333'
+export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-service-key'
+```
+
+PowerShell 使用 `$env:POLICY_ANALYSIS_WEBFETCH__BASE_URL = 'http://127.0.0.1:33333'` 和 `$env:POLICY_ANALYSIS_WEBFETCH__API_KEY = 'replace-with-your-service-key'`。密钥从环境注入，不写入版本库。配置后重启应用，再到系统配置查看连接状态；健康探测访问 WebFetch 的 `health/ready`，业务请求使用 Bearer 认证。
+
+可复制的只读健康检查（不发送密钥）：
+
+```bash
+curl --fail http://127.0.0.1:30080/health/ready
+curl --fail http://127.0.0.1:33333/health/ready
+```
+
+如果采集失败，先检查 base URL、网络连通和服务就绪；健康成功仍可能因 API Key 无效导致业务认证失败。再查任务日志中的稳定原因码，区分认证、超时、限流、网页正文不足和服务返回格式不兼容。应用自身的 [存活检查](http://127.0.0.1:30080/health/live) 和 [就绪检查](http://127.0.0.1:30080/health/ready) 不等同于上游业务抓取成功。本文说明来自代码核对，未探测任何私人服务。
+
+## 升级、部署与运维
+
+1. 停止当前服务，备份实际数据库、密码文件、`src/config/app.json` 和部署环境文件；数据库应在停服后复制以保持一致。
+2. 更新源码并重新安装 Python 依赖，执行 `npm --prefix src/app/frontend ci` 和 `npm --prefix src/app/frontend run build`。
+3. 保留原配置与数据路径，启动应用；启动过程运行数据库迁移。查看日志并检查就绪接口、登录、查询和任务状态。
+4. 回滚时停止服务，恢复与旧代码匹配的数据库备份和环境配置，再启动旧版本；不要只降级代码而保留已迁移的数据库。
+
+当前仓库不提供 Docker Compose 启动承诺。Linux systemd、Jenkins 配置及详细采集/API 操作参见 [开发与运维参考](docs/operations.md)；接入前替换为自己的部署环境。部署更新应保留现有配置与数据。
+
+## 验证与文档
+
+```bash
+python -m pytest src/tests/backend src/tests/smoke -q
 npm --prefix src/app/frontend run type-check
 npm --prefix src/app/frontend run lint
 npm --prefix src/app/frontend run test -- --run
@@ -114,146 +99,10 @@ npm --prefix src/app/frontend run build
 npm --prefix src/app/frontend run test:e2e
 ```
 
-`test:e2e` 使用 Playwright 启动 Vite 开发服务器，并通过浏览器网络拦截模拟安全的后端测试数据，覆盖管理员登录、主导航、政策检索、政策详情纯文本展示、手工触发采集任务、任务详情日志，以及 320px、390px、768px 视口的移动导航和页面溢出检查等主路径。
+浏览器测试通过网络模拟验证主要页面，不证明外部采集服务可用。详细需求见 [分析规格](openspec/specs/policy-analysis/spec.md)，技术设计见 [系统设计](docs/superpowers/specs/2026-07-31-policy-analysis-system-mvp-design.md)，近期功能见 [CHANGELOG](CHANGELOG.md)。
 
-## 政策数据库页面
+发布前请阅读 [人工安全操作](docs/open-source-security.md) 与 [本轮验证记录](docs/open-source-validation.md)。
 
-政策数据库为有 `policies` 页面权限的用户提供以下查询与阅读能力：
+## 许可证与第三方内容
 
-- “标题关键词”仅在政策标题中执行包含匹配；
-- “正文全文检索”使用 SQLite FTS5 trigram 索引查询政策正文，一至二字短词使用安全的字面包含匹配；
-- 发布部门、政策类别和政策来源使用数据库中已有政策派生的下拉选项，不需要手工输入 ID；
-- 发布时间与最近抓取时间支持升序、降序切换，并明确显示“最早优先”或“最新优先”；
-- 所有筛选、分页和排序状态写入 URL，可通过刷新或分享链接恢复；
-- 政策详情以纯文本显示正文，按换行/空行切分为段落分段渲染并对每段首行缩进两个汉字宽度，不解析或执行抓取内容中的 HTML；正文段落结构来自抓取 HTML 的 `<p>` 元素（见下节），存量无换行正文安全兜底为单段渲染。
-
-相关只读 API：
-
-- `GET /api/v1/policies/filters`：返回去重且稳定排序的 `publishers`、`categories`、`sources`；选项仅包含至少关联一条政策的数据；
-- `GET /api/v1/policies`：支持 `keyword`、`full_text`、`publisher`、`category_id`、`source_id`、发布时间/抓取时间范围、分页及排序参数；多个条件使用 AND 组合；
-- `GET /api/v1/policies/{policy_id}`：返回政策元数据和纯文本正文。
-
-接口均要求登录并具有政策数据库页面权限。页面显示时间统一转换为北京时间。需求行为与技术决策分别维护在 OpenSpec 变更的 `specs/policy-database-experience/spec.md` 和 `design.md` 中。
-
-## 政策分析页面
-
-政策分析页面为有 `analysis` 页面权限的用户提供基于政策正文的词频分析能力：
-
-- 在政策数据库页面勾选一篇或多篇政策，点击「分词分析」创建分析任务（支持跨页保留选中）；
-- 后台异步执行中文分词（jieba）、停用词过滤、词频统计、TF-IDF（以选中政策集合为语料）与关键词共现计算；
-- 任务完成后提供三个视图：词频排行（支持按频次/TF-IDF 排序）、词云（ECharts wordCloud）、关键词关系图（ECharts Graph 力导向）；
-- 页面内展示任务状态与历史分析任务列表，所有时间以北京时间显示。
-- 勾选至少两篇不同政策后，可点击「政策比对」异步生成差异分析报告；报告包含政策概览、共同关注点、核心关键词，以及全部两两组合的文本特征相似度、共同重点和各自独有重点；
-- 政策比对报告与任务一同持久化，可从历史分析任务中再次查看。
-
-相关 API：
-
-- `POST /api/v1/analysis/tasks`：创建分析任务，body `{ policy_ids: [...] }`，返回 `{ task_id, status }`（需 CSRF 与 analysis 页面权限）；
-- `POST /api/v1/analysis/comparison-tasks`：选择至少两篇不同政策创建差异比对任务；
-- `GET /api/v1/analysis/tasks/{task_id}/comparison-report`：查询已完成任务的结构化政策差异报告；
-- `GET /api/v1/analysis/tasks`：历史任务分页列表；
-- `GET /api/v1/analysis/tasks/{task_id}`：任务状态详情；
-- `GET /api/v1/analysis/tasks/{task_id}/words?top=50&sort_by=frequency|tfidf`：聚合词频结果；
-- `GET /api/v1/analysis/tasks/{task_id}/relations?top=50`：关键词共现关系与节点；
-- `GET /api/v1/analysis/tasks/{task_id}/logs`：任务日志。
-
-分析任务在独立线程池执行（`analysis.max_workers` 可配，默认 1），与采集任务解耦；单次任务政策数上限 `analysis.max_policies_per_task`（默认 100）。配置项见 `src/config/app.json` 的 `analysis` 节。
-
-## 政策采集后端
-
-采集后端通过 WebFetch 服务获取 RSS、栏目页面和文章正文。运行前需要配置：
-
-```bash
-export POLICY_ANALYSIS_WEBFETCH__BASE_URL='http://your-webfetch-service'
-export POLICY_ANALYSIS_WEBFETCH__API_KEY='replace-with-your-webfetch-api-key'
-```
-
-采集规则的 `discovery` 配置支持为栏目入口选择抓取策略：`channel_fetch_mode` 取值 `auto`/`http`/`browser`（默认 `auto`，保持原有行为）。对列表由 JS 动态加载的栏目页（如新华网时政要闻页），可将其设为 `browser`，采集器会通过 WebFetch 的浏览器渲染模式等待页面加载完成后再解析文章链接；渲染失败时自动回退 HTTP 抓取静态骨架。旧任务快照不含该字段时按默认值处理。
-
-管理员登录后，可以在任务中心的采集规则页面维护规则。
-
-采集规则页面的“类别”支持选择已有类别或选择“新建类别…”并填写名称，例如“中央委员会全会”。保存规则时会同时创建类别，同名类别自动复用，后续规则可直接选择。类别用于文章归档和筛选，包含词、排除词用于限定采集范围；仅填写类别名称不会自动添加采集关键词。新增和编辑均支持此操作，仅管理员可保存。API 请求使用 `category_code`（已有类别）或 `category_name`（新类别名称，去除首尾空白后 1–256 字符），二者必须且只能提供一个；PATCH 未提供类别字段时保留原类别。保存失败时新类别一并回滚。
-
-每条采集规则自带触发方式（`trigger_mode`）：
-
-- **手工触发（manual）**：仅在任务中心手工创建采集任务，系统不会自动运行；
-- **定时运行（schedule）**：按北京时间 5 段 Cron 表达式（`cron_expression`）由调度器自动创建采集任务，同时也支持手工立即触发一次；
-  - 保存定时配置后默认停用（`schedule_enabled=false`），确认手工回填结果正确后再勾选「启用定时运行」；
-  - 启用定时的规则必须处于启用状态；把规则切回手工触发会自动清空 Cron 与下次执行时间；
-  - 规则列表展示 Cron、启停状态、下次执行与上次执行时间，均以北京时间显示。
-
-首次回填建议流程：
-
-1. 创建或确认来源、政策类别和采集规则；
-2. 先使用 `POST /api/v1/tasks` 手工触发一次回填；
-3. 通过 `GET /api/v1/tasks/{task_id}` 查看终态和进度；
-4. 通过 `GET /api/v1/tasks/{task_id}/items` 查看每篇候选文章的处理结果；
-5. 通过 `GET /api/v1/tasks/{task_id}/logs` 查看采集日志和失败原因；
-6. 确认政策库检索结果正确后，再在采集规则中启用定时运行。
-
-常见失败会记录为稳定的 `reason_code`，例如标题未命中、正文过短、超出回填窗口、来源非官方、重复政策或 WebFetch 临时不可用。任务调度使用单进程 worker 和 APScheduler；`/health/ready` 会在 SQLite 可用且 worker 已启动时返回就绪。
-
-采集器在入库前会对正文进行清洗并恢复段落结构：由于 WebFetch 的 `generic.article` 适配器会把正文压成单行空格拼接、丢失 `<p>` 段落，采集判定通过后额外调用 `fetch_text` 取回原始 HTML，优先解析 `<div id="detail">` 内的 `<p>` 块还原段落（`<p>` 缺失时回退到扁平正文），再剥离网页页面装饰信息——包括开头的面包屑（含「新华网 > > 正文」双 `>` 变体）、栏目、带空格时间戳（如「2022 12/ 14」）与「来源：」页眉行，以及结尾的编辑署名（「策划：」「监制：」「新华社音视频部制作」「新华通讯社出品」等）、「【纠错】」「【责任编辑:xxx】」标记、「阅读下一篇：N …」推荐区块和尾部纯数字跟踪 ID，并归一化段落空白；清洗在计算内容哈希与写入正文前完成，使去重与存储均基于段落化纯政策正文，且不改变采集判定阈值。段落抓取失败或解析为空时自动回退扁平正文并记录告警日志，绝不阻断采集。
-
-已入库政策的历史正文可使用 `scripts/reclean_policy_content.py` 重洗，脚本对每条 `content_text` 重算 `content_hash`，仅更新确有变化的行（幂等，可重复执行），`policies_fts_au` 触发器会同步全文索引。两种模式：
-
-- **扁平清洗（默认）**：对存量 `content_text` 应用新版清洗规则，剥离页脚/工具栏/编辑署名等装饰。但 WebFetch 适配器会把标题预置在正文最前，使页眉（`新华网 > 时政 > 正文 … 来源：新华网`）不在行首，行首锚定的清洗正则无法剥离它，且扁平正文无法分段。
-- **重抓分段（`--refetch`）**：按每条政策的 `canonical_url` 重新抓取原始 HTML，从 `<p>` 元素还原段落结构（天然排除位于 `<p>` 之外的标题与页眉），彻底去页眉并恢复多段正文。抓取失败或解析为空时安全回退到扁平清洗，绝不因重抓失败阻塞清洗。需配置 WebFetch（`base_url`/`api_key`）。
-
-用法（App 运行环境，venv 已激活，`service.env` 已注入 WebFetch 配置）：
-
-```bash
-python scripts/reclean_policy_content.py --dry-run              # 预览扁平清洗将变更的行
-python scripts/reclean_policy_content.py                         # 扁平清洗写库
-python scripts/reclean_policy_content.py --refetch --dry-run     # 预览重抓分段将变更的行
-python scripts/reclean_policy_content.py --refetch               # 重抓 HTML 还原段落并写库
-```
-
-### 默认采集场景与种子清单
-
-系统首次启动会按 `DEFAULT_SCENARIOS` 自动初始化下列采集场景（每个场景绑定一个政策类别、一条采集规则与一份已核验种子清单；新增场景只需新增 `ScenarioSpec` 与对应 JSON 资源）：
-
-| 场景 | 政策类别 | 采集规则名 | 回填窗口 | 种子清单 |
-| --- | --- | --- | --- | --- |
-| `politburo` | 中央政治局会议 | 中央政治局会议 | 5 年 | `collectors/resources/xinhua_politburo_seed_urls.json` |
-| `finance_council` | 中央财经委员会会议 | 中央财经委员会会议 | 9 年 | `collectors/resources/xinhua_finance_council_seed_urls.json` |
-
-中央财经委员会种子清单现收录 15 条已核验通稿 URL（2018-04-02 第一次至 2025-07-01 二十届第六次，覆盖新华网 `xinhuanet.com`、`news.cn` 与人民网 `people.com.cn` 域名形态）。其中十九届第七次会议补充收录人民网发布的《习近平：国家中长期经济社会发展战略若干重大问题》，该文末尾标明为 2020-04-10 在中央财经委员会第七次会议上的讲话。未收录的 2 次会议（二十届第三/五次）经多渠道核实暂未发现公开发布通稿，按"无法核实的不入清单"原则跳过，后续如公开发布可由 RSS 发现机制自动补采。
-
-种子清单的离线校验：
-
-```bash
-python scripts/validate_seed_manifest.py
-# 预期：所有场景的清单均有效时输出
-#   seed manifest valid: 0 invalid, 0 duplicate
-# 并以状态码 0 退出；任一场景无效则输出对应场景的错误并以状态码 1 退出。
-```
-
-### 来源白名单与跨源同一会议去重
-
-采集场景的 `Source.allowed_domains`（首次启动由 `bootstrap.py` 写入）默认接受以下域名集合：
-
-| 域名 | 用途 |
-| --- | --- |
-| `news.cn`、`xinhuanet.com` | 新华网及子域（中央政治局会议与中央财经委员会会议的主源） |
-| `people.com.cn` | 人民日报（politics.people.com.cn / finance.people.com.cn 等子域） |
-| `cctv.com` | 央视新闻（news.cctv.com / jingji.cctv.com / tv.cctv.com 等子域） |
-
-种子清单 URL 校验（`bootstrap.py:_host_allowed`）对以上基域名做后缀匹配：主机名等于基域名或以 `.基域名` 结尾均接受（覆盖 `www.` / 频道子域），形如 `news.cn.evil.example`、`notpeople.com.cn` 的伪装域名会被拒绝。`m.people.cn`（注意是 `.cn` 而非 `.com.cn`）不在白名单内。
-
-当同一场会议（例如「中央财经委员会第十次会议」）被多个来源同步发稿或转载时，跨源去重在 `PolicyService._upsert` 中通过 `(category_id, title, published_date_in_beijing)` 三元组判定为同一会议，运行时只会在 `policies` 表落一条记录。源优先级（`policies/service.py:_source_priority`）按"权威度"从高到低硬编码：
-
-| 来源 | 优先级 |
-| --- | --- |
-| `news.cn` / `xinhuanet.com` | 3 |
-| `people.com.cn` | 2 |
-| `cctv.com` | 1 |
-| 其他 | 0 |
-
-升级语义：
-
-- 新源优先级 **高于** 已存源时，把已存 policy 整体升级为新源（`source_id` / `canonical_url` / `publisher` / `content_text` / `content_hash` / `webfetch_artifact_id` / `last_crawled_at` 全部覆盖，旧 `content_text` 写入 `PolicyRevision`），返回 `outcome="updated"`；
-- 新源优先级 **不高于** 已存源时，只标 `outcome="duplicate"`，已存 policy 不动；
-- 同源 + 相同 `(source_id, canonical_url)` 或 `(source_id, content_hash)` 时仍走原有的 source-scoped dedup，不受跨源检查影响。
-
-标题匹配为严格相等（不做"（受权发布）"等公共前后缀归一化），`published_at` 统一以 `Asia/Shanghai` 时区对齐到日期。配套索引 `ix_policies_category_title_published` 由迁移 `0005` 创建，仅服务跨源 dedup 检索，不替代原有的 `uq_policies_source_canonical_url` 与 `ix_policies_source_content_hash`。
+项目代码及原创演示样本采用 [MIT License](LICENSE)。第三方依赖继续遵循各自许可证；抓取的真实政策、网页和图片不会因本项目许可证而自动获得 MIT 授权，使用与再分发时请核实来源及相关权利。

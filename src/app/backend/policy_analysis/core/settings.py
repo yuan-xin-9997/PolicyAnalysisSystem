@@ -10,7 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from policy_analysis.core.paths import resolve_project_path
 
-_BUILD_METADATA_NAMES = {"POLICY_ANALYSIS_VERSION", "POLICY_ANALYSIS_COMMIT_SHA"}
+_NON_CONFIGURATION_NAMES = {
+    "POLICY_ANALYSIS_VERSION",
+    "POLICY_ANALYSIS_COMMIT_SHA",
+    "POLICY_ANALYSIS_INITIAL_ADMIN_PASSWORD",
+}
 
 
 class StrictSettingsModel(BaseModel):
@@ -173,7 +177,7 @@ def _merged_configuration(
     source_tree = _source_tree(AppSettings().model_dump(mode="json"), "default")
     _overlay_config_sources(source_tree, configured)
     for name, raw_value in sorted(environ.items(), key=lambda item: item[0].count("__")):
-        if name.startswith("POLICY_ANALYSIS_") and name not in _BUILD_METADATA_NAMES:
+        if name.startswith("POLICY_ANALYSIS_") and name not in _NON_CONFIGURATION_NAMES:
             keys = [part.lower() for part in name.removeprefix("POLICY_ANALYSIS_").split("__")]
             parsed = _parse_environment_value(raw_value)
             _set_nested(data, keys, parsed)

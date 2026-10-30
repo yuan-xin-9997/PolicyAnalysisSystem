@@ -117,15 +117,7 @@ pipeline {
                     if [ ! -f "${DEPLOY_DIR}/src/config/app.json" ]; then
                         cp "${WORKSPACE}/src/config/app.json" "${DEPLOY_DIR}/src/config/app.json"
                     fi
-                    if [ ! -f "${DEPLOY_DIR}/src/data/password.txt" ]; then
-                        cat > "${DEPLOY_DIR}/src/data/password.txt" <<'EOF'
-# 格式: username:password:role  (role 取值: admin | user)
-# admin 默认拥有所有页面权限；user 的可见页面由管理员在权限管理页配置。
-# 修改本文件后，新用户在下次登录时会自动同步到数据库。
-admin:admin123:admin
-EOF
-                        chmod 600 "${DEPLOY_DIR}/src/data/password.txt"
-                    fi
+                    "${WORKSPACE}/.venv/bin/python" "${WORKSPACE}/scripts/initialize_admin.py" --root "${DEPLOY_DIR}"
                 '''
             }
         }

@@ -18,7 +18,7 @@ from policy_analysis.main import _upgrade_database
 
 
 def environment(root):
-    result = dict(os.environ)
+    result = {}
     path = root / "service.env"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -27,6 +27,7 @@ def environment(root):
             name, value = line.removeprefix("export ").split("=", 1)
             values = shlex.split(value, comments=True)
             result[name.strip()] = " ".join(values)
+    result.update(os.environ)
     return result
 
 

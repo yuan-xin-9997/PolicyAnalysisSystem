@@ -42,7 +42,7 @@ const logs = {
 
 const comparisonReport = {
   task_id: 52,
-  summary: '本报告比对 2 篇政策，共识关键词 2 个，两两文本特征平均相似度为 62.5%。',
+  summary: '本报告比对 2 篇政策，共同关键词 2 个，两两文本特征平均相似度为 62.5%。',
   common_keywords: ['人工智能', '产业发展'],
   policies: [
     { id: 7, title: '产业发展规划', publisher: '国务院', published_at: '2026-07-30T06:00:00Z', top_keywords: ['人工智能', '科技创新'] },
@@ -129,11 +129,13 @@ describe('政策分析', () => {
     expect(screen.getByText('分析执行异常。')).toBeInTheDocument()
   })
 
-  it('展示政策差异分析报告', async () => {
+  it('展示文本特征比较报告', async () => {
     const comparisonTask = { ...succeededTask, id: 52, task_type: 'policy_comparison' }
     vi.stubGlobal('fetch', mockFetch(comparisonTask, [comparisonTask]))
     await renderAnalysis('/analysis?taskId=52')
-    expect(await screen.findByText('政策差异分析报告')).toBeInTheDocument()
+    expect(await screen.findByText('文本特征比较报告')).toBeInTheDocument()
+    expect(screen.getByText(/不判断法律效力/)).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /正文与原文入口/ })).toHaveLength(2)
     expect(screen.getByText('产业发展规划 vs 安全治理规划')).toBeInTheDocument()
     expect(screen.getByText('文本特征相似度：62.5%')).toBeInTheDocument()
     expect(screen.getAllByText(/科技创新/).length).toBeGreaterThan(0)
