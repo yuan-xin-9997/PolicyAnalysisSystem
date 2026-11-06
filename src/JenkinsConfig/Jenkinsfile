@@ -17,6 +17,7 @@ pipeline {
         APP_HOST = '0.0.0.0'
         APP_PORT = '30080'
         PYTHON_BIN = 'python3.12'
+        PIP_INDEX_URL = 'https://pypi.tuna.tsinghua.edu.cn/simple'
     }
 
     stages {
