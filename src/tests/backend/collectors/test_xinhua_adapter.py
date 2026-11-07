@@ -692,6 +692,37 @@ def test_extract_paragraphs_falls_back_to_all_p_when_no_detail_div() -> None:
     assert extract_paragraphs(html) == "唯一段落正文。"
 
 
+def test_extract_paragraphs_prefers_people_show_text_container() -> None:
+    html = (
+        "<html><body>"
+        '<div class="nav"><p>登录人民网通行证 立即注册</p><p>忘记密码？</p></div>'
+        '<div class="text_con">'
+        '<p class="sou">2026年10月29日17:48 来源：新华社222</p>'
+        '<p class="dyue">订阅取消订阅已收藏收藏大字号</p>'
+        '<div class="show_text" id="rm_txt_zw">'
+        "<p>新华社北京10月29日电</p>"
+        "<p>全会号召，全党更加紧密地团结。</p>"
+        "</div></div>"
+        "<footer><p>人民日报社概况 | 关于人民网</p>"
+        "<p>人 民 网 版 权 所 有</p></footer>"
+        "</body></html>"
+    )
+
+    assert extract_paragraphs(html) == ("新华社北京10月29日电\n全会号召，全党更加紧密地团结。")
+
+
+def test_clean_strips_people_login_toolbar_and_footer_from_flat_body() -> None:
+    content = (
+        "登录人民网通行证 立即注册 忘记密码？ 2026年10月29日17:48 来源：新华社222 "
+        "订阅取消订阅已收藏收藏大字号 点击播报本文，约 "
+        "新华社北京10月29日电 全会号召，全党更加紧密地团结。 "
+        "学习路上 时习之 习近平系列重要讲话数据库 微信“扫一扫”添加“学习大国” "
+        "人民日报社概况 | 关于人民网 | 报社招聘"
+    )
+
+    assert _clean_content(content) == "新华社北京10月29日电 全会号召，全党更加紧密地团结。"
+
+
 def test_extract_paragraphs_returns_empty_when_no_p_blocks() -> None:
     assert extract_paragraphs("<html><body><div>无段落</div></body></html>") == ""
     assert extract_paragraphs("") == ""

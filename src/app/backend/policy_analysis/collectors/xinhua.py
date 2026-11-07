@@ -45,16 +45,59 @@ _CURRENT_URL_DATE = re.compile(r"/(20\d{2})(\d{2})(\d{2})(?:/|$)")
 _BREADCRUMB_SEGMENT = r"(?:[^\s>]*\s*>\s*)+[^\s>]+"
 _TIMESTAMP_SEGMENT = (
     r"\d{4}(?:[-/年.]\d{1,2}[-/月.]\d{1,2}日?|\s\d{1,2}/\s*\d{1,2})"
-    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"
+    r"(?:[ T]?\d{1,2}:\d{2}(?::\d{2})?)?"
 )
 # Bounded to known official source names so a source marker glued to body text
-# (no separating space) never eats the leading body paragraph.
-_SOURCE_SEGMENT = r"来源：(?:新华社|新华网|新华通讯社)"
+# (no separating space) never eats the leading body paragraph. People.com.cn
+# appends a page-view count directly after the source, e.g. "来源：新华社222".
+_SOURCE_SEGMENT = r"来源：(?:新华社|新华网|新华通讯社)\d*"
 _TOOLBAR_SEGMENT = r"字体：\s*小\s*中\s*大|分享到："
+# People.com.cn page chrome that appears inside the flattened article text:
+# the hidden login form, the article toolbar, and the audio-player prompt.
+_PEOPLE_CHROME_SEGMENT = (
+    r"登录[^\s]{0,20}通行证(?:\s*立即)?注册"
+    r"|忘记密码？?"
+    r"|(?:订阅|取消订阅|已收藏|收藏|大字号|中字号|小字号)+"
+    r"|点击播报本文[，,]?\s*约?"
+)
 _DECORATIVE_SEGMENT = rf"(?:{_BREADCRUMB_SEGMENT}|{_TIMESTAMP_SEGMENT}|{_SOURCE_SEGMENT}|{_TOOLBAR_SEGMENT})"
-_DECORATIVE_LINE = re.compile(rf"^(?:{_DECORATIVE_SEGMENT}\s*)+$")
-_DECORATIVE_PREFIX = re.compile(rf"^\s*(?:{_DECORATIVE_SEGMENT}\s*)+")
+_CHROME_SEGMENT = rf"(?:{_DECORATIVE_SEGMENT}|{_PEOPLE_CHROME_SEGMENT})"
+_DECORATIVE_LINE = re.compile(rf"^(?:{_CHROME_SEGMENT}\s*)+$")
+_DECORATIVE_PREFIX = re.compile(rf"^\s*(?:{_CHROME_SEGMENT}\s*)+")
 _READ_NEXT_MARKER = "阅读下一篇"
+# People.com.cn sidebar/footer block that follows the article body. Requiring
+# the distinctive "学习路上 / 时习之 / 习近平系列重要讲话数据库" sequence avoids
+# truncating an article that merely mentions one of these labels.
+_PEOPLE_FOOTER_MARKER = re.compile(
+    r"(?:^|\s)学习路上\s+时习之\s+习近平系列重要讲话数据库"
+    r"|(?:^|\s)人民日报社概况\s*[|｜]"
+    r"|(?:^|\s)人\s*民\s*网\s*版\s*权\s*所\s*有"
+    r"|专题[·•]\s*习近平活动报道专页"
+)
+# People.com.cn's top navigation ends with a breadcrumb. In flattened text the
+# nav links precede it, so cut everything before the breadcrumb.
+_PEOPLE_BREADCRUMB_MARKER = re.compile(r"中国共产党新闻网\s*>>\s*[^\s]+")
+# Common article-body containers used by the supported official sites. Xinhua
+# uses ``#detail``; People.com.cn uses ``.show_text``/``#rm_txt_zw``. Matching
+# these containers keeps navigation, login prompts, and footers outside the body
+# instead of falling back to every ``<p>`` on the page.
+_ARTICLE_CONTAINER_IDS = frozenset({"detail", "rm_txt_zw", "artibody", "ozoom", "js_content"})
+_ARTICLE_CONTAINER_CLASSES = frozenset(
+    {
+        "show_text",
+        "rm_txt_con",
+        "article-content",
+        "article_content",
+        "articlecontent",
+        "post-content",
+        "entry-content",
+        "content-body",
+        "article-body",
+        "detail-content",
+        "detail_content",
+        "art_content",
+    }
+)
 # Trailing pure-numeric tracking ID Xinhua appends (e.g. "01002002011000…").
 _TRACKING_ID_TAIL = re.compile(r"\s*\d{16,}\s*$")
 _CORRECTION_MARKS = re.compile(r"【纠错】|【责任编辑[:：][^】]*】")
@@ -366,9 +409,17 @@ def _clean_content(content: str) -> str:
         return content
 
     text = content
+    breadcrumb = _PEOPLE_BREADCRUMB_MARKER.search(text)
+    if breadcrumb is not None and breadcrumb.start() > 0:
+        text = text[breadcrumb.start() :]
+
     marker = text.find(_READ_NEXT_MARKER)
     if marker != -1:
         text = text[:marker]
+
+    footer = _PEOPLE_FOOTER_MARKER.search(text)
+    if footer is not None and footer.start() > 0:
+        text = text[: footer.start()]
 
     # Strip decorations that may appear inline within a line (flattened body) or
     # as standalone lines (paragraph-structured body).
@@ -400,11 +451,15 @@ def _clean_content(content: str) -> str:
     # never removed.
     if lines:
         match = _DECORATIVE_PREFIX.match(lines[0])
+        prefix = match.group() if match else ""
         if match and (
-            ">" in match.group()
-            or "来源：" in match.group()
-            or "字体：" in match.group()
-            or "分享到：" in match.group()
+            ">" in prefix
+            or "来源：" in prefix
+            or "字体：" in prefix
+            or "分享到：" in prefix
+            or "登录" in prefix
+            or "忘记密码" in prefix
+            or "点击播报" in prefix
         ):
             lines[0] = lines[0][match.end() :]
 
@@ -430,31 +485,36 @@ def _clean_content(content: str) -> str:
 
 
 class _ParagraphParser(HTMLParser):
-    """Collect text from ``<p>`` blocks, preferring the article detail container.
+    """Collect text from ``<p>`` blocks, preferring the article container.
 
     WebFetch's ``generic.article`` adapter flattens the body into a single
     space-joined line, discarding paragraph boundaries. This parser recovers
-    them from the raw HTML by reading ``<p>`` blocks inside ``<div id="detail">``
-    (falling back to all ``<p>`` blocks when no detail container is present),
-    which also naturally excludes most page chrome that lives outside ``<p>``.
+    them from the raw HTML by reading ``<p>`` blocks inside a known article
+    container (Xinhua's ``#detail``, People.com.cn's ``.show_text`` /
+    ``#rm_txt_zw``, and other common official-site containers). This naturally
+    excludes page chrome such as navigation, hidden login forms, toolbars, and
+    footers that live outside the article container. When no container is
+    present, it falls back to all ``<p>`` blocks.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._detail: list[str] = []
         self._all: list[str] = []
-        self._detail_depth = 0
+        self._groups: list[list[str]] = []
+        self._open: list[tuple[str, int | None]] = []
+        self._active: list[int] = []
         self._in_p = False
         self._text: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         lowered = tag.casefold()
-        if lowered == "div":
-            attr_map = {key.casefold(): (value or "") for key, value in attrs}
-            if attr_map.get("id") == "detail" or "detail" in attr_map.get("class", ""):
-                self._detail_depth = 1
-            elif self._detail_depth:
-                self._detail_depth += 1
+        if lowered in {"div", "article"}:
+            container_index: int | None = None
+            if _is_article_container(lowered, attrs):
+                container_index = len(self._groups)
+                self._groups.append([])
+                self._active.append(container_index)
+            self._open.append((lowered, container_index))
         elif lowered == "p":
             self._in_p = True
             self._text = []
@@ -470,14 +530,37 @@ class _ParagraphParser(HTMLParser):
             text = " ".join("".join(self._text).split())
             if text:
                 self._all.append(text)
-                if self._detail_depth:
-                    self._detail.append(text)
+                for index in self._active:
+                    self._groups[index].append(text)
             self._text = []
-        elif lowered == "div" and self._detail_depth:
-            self._detail_depth -= 1
+        elif lowered in {"div", "article"}:
+            # Tolerate malformed markup by popping back to the matching open tag.
+            for position in range(len(self._open) - 1, -1, -1):
+                open_tag, container_index = self._open[position]
+                if open_tag == lowered:
+                    del self._open[position:]
+                    if container_index is not None:
+                        self._active.remove(container_index)
+                    break
 
     def paragraphs(self) -> list[str]:
-        return self._detail if self._detail else self._all
+        candidates = [(index, group) for index, group in enumerate(self._groups) if group]
+        if not candidates:
+            return self._all
+        # Prefer the container with the most paragraphs; on a tie prefer the
+        # later (more deeply nested) container so an inner body wins over a
+        # wrapper that also contains the header.
+        return max(candidates, key=lambda item: (len(item[1]), item[0]))[1]
+
+
+def _is_article_container(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    if tag not in {"div", "article"}:
+        return False
+    attr_map = {key.casefold(): (value or "") for key, value in attrs}
+    if attr_map.get("id", "").casefold() in _ARTICLE_CONTAINER_IDS:
+        return True
+    classes = {part.casefold() for part in attr_map.get("class", "").split()}
+    return bool(classes & _ARTICLE_CONTAINER_CLASSES)
 
 
 def extract_paragraphs(html: str) -> str:
